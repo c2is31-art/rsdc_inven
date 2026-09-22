@@ -35,22 +35,31 @@ def get_gspread_client():
         "https://www.googleapis.com/auth/drive"
     ]
     
-    # st.secrets에서 gcp_service_account 딕셔너리를 직접 읽어옵니다.
+    # Secrets 정보 불러오기
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    
+    # private_key 자동 줄바꿈 문자로 보정
+    if "private_key" in creds_dict:
+        pk = str(creds_dict["private_key"])
+        pk = pk.replace("\\n", "\n")
+        creds_dict["private_key"] = pk
+        
     credentials = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
+        creds_dict,
         scopes=scopes
     )
     return gspread.authorize(credentials)
 
+# 구글 시트 데이터베이스 연동 실행
 try:
     gc = get_gspread_client()
-    # 구글 시트 이름 지정
+    # 구글 드라이브에 만드신 구글 시트 파일명
     sh = gc.open("러셀대치_통합DB")
     ws_users = sh.worksheet("users")
     ws_facility = sh.worksheet("facility")
     ws_inventory = sh.worksheet("inventory")
 except Exception as e:
-    st.error(f"⚠️ 구글 시트 연동에 실패했습니다. Secrets 설정을 확인해 주세요: {e}")
+    st.error(f"⚠️ 구글 시트 연동에 실패했습니다. Secrets 설정 및 시트 이름을 확인해 주세요: {e}")
     st.stop()
 
 def clean_phone(phone_str):
