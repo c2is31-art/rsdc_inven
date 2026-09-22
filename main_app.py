@@ -8,7 +8,7 @@ from datetime import datetime
 # 0. 페이지 기본 및 CSS 스타일링 설정 (모바일/태블릿 반응형)
 # ==========================================
 st.set_page_config(
-    page_title="러셀대치 학원 통합 관리 시스템", 
+    page_title="러셀대치 학원 보수요청/재고 관리 시스템", 
     page_icon="🏢",
     layout="wide",
     initial_sidebar_state="expanded"
