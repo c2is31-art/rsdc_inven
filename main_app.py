@@ -226,18 +226,29 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
         st.dataframe(df_f, use_container_width=True)
 
 # ==========================================
-# 4. 재고 관리 (입고 기능 포함)
+# 4. 재고 관리 (실사/입고/출고 분리 보완판)
 # ==========================================
 elif menu == "📦 물품/비품 재고 관리":
     st.title("📦 재고 관리 System")
-    tab1, tab2, tab3 = st.tabs(["📝 마감 재고 실사", "📥 입고 처리 (수량 추가)", "📊 현황 조회"])
+    tab1, tab2, tab3 = st.tabs(["📝 마감 재고 실사", "📥 입고 및 출고(사용) 등록", "📊 재고 현황 & 이력"])
 
-    # 탭 1: 마감 재고 입력
+    # 안전하게 구글 시트 데이터 불러오기
+    def get_safe_inventory_df():
+        try:
+            records = ws_inventory.get_all_records()
+            return pd.DataFrame(records)
+        except Exception:
+            all_cols = ["일시", "구분", "작성자"] + ALL_ITEMS + ["비고"]
+            return pd.DataFrame(columns=all_cols)
+
+    # 탭 1: 마감 재고 실사 (기준 재고 등록)
     with tab1:
-        st.subheader("일일 마감 실사 재고 입력")
+        st.subheader("📝 일일 마감 실사 재고 입력")
+        st.caption("※ 실제 창고에 남아있는 실사 수량을 입력합니다. (이후 입고/출고 계산의 기준점이 됩니다)")
+        
         with st.form("inv_form"):
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-            st.write(f"등록일시: {now_str}")
+            st.write(f"등록일시: **{now_str}** | 작성자: **{st.session_state['user_name']}**")
             
             st.markdown("#### 📄 소모품 (BOX)")
             c_vals = {item: st.number_input(f"{item}", min_value=0, value=0, key=f"c_{item}") for item in CONSUMABLES}
@@ -245,40 +256,85 @@ elif menu == "📦 물품/비품 재고 관리":
             st.markdown("#### 💻 비품/기기 (개)")
             e_vals = {item: st.number_input(f"{item}", min_value=0, value=0, key=f"e_{item}") for item in EQUIPMENT}
 
-            if st.form_submit_button("마감 재고 저장"):
+            if st.form_submit_button("마감 실사 저장", use_container_width=True):
                 all_v = {**c_vals, **e_vals}
-                row = [now_str, st.session_state['user_name']] + [all_v[i] for i in ALL_ITEMS]
+                # 구분: '실사'
+                row = [now_str, "실사", st.session_state['user_name']] + [all_v[i] for i in ALL_ITEMS] + ["정기 마감 실사"]
                 ws_inventory.append_row(row)
-                st.success("✅ 마감 재고가 기록되었습니다.")
+                st.success("✅ 마감 실사 데이터가 구글 시트에 독립적으로 저장되었습니다.")
+                st.rerun()
 
-    # 탭 2: 물품 입고 처리 (신규 추가된 입고 기능)
+    # 탭 2: 입고 및 출고 등록 (독립 내역 기록)
     with tab2:
-        st.subheader("📥 물품 신규 입고 등록")
-        inc_item = st.selectbox("입고 대상 물품 선택", ALL_ITEMS)
-        inc_qty = st.number_input("입고 수량", min_value=1, value=1)
-        inc_memo = st.text_input("입고 비고/메모 (예: OO문구 구매분)", placeholder="선택 사항")
+        st.subheader("📥 입고 / 📤 출고(사용) 등록")
+        st.caption("※ 수량 변동 내역(입고/사용)만 별도로 등록합니다.")
+        
+        inout_type = st.radio("작업 구분", ["📥 입고 (수량 추가)", "📤 출고 (사용/차감)"], horizontal=True)
+        target_item = st.selectbox("물품 선택", ALL_ITEMS)
+        qty = st.number_input("수량", min_value=1, value=1)
+        memo = st.text_input("비고/메모 (예: OO문구 구매분, 3층 자습관 교체용 등)", placeholder="사유 입력")
 
-        if st.button("입고 반영하기", use_container_width=True):
-            df_inv = pd.DataFrame(ws_inventory.get_all_records())
+        if st.button("내역 등록하기", use_container_width=True):
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            is_in = "입고" in inout_type
+            action_label = "입고" if is_in else "출고"
             
-            # 최신 재고 데이터 가져오기
-            last_row = df_inv.iloc[-1].to_dict() if not df_inv.empty else {}
+            # 입고는 양수(+), 출고는 음수(-) 처리하여 단일 물품 수량 기록
+            record_qty = qty if is_in else -qty
             
-            # 신규 재고 계산 (최초일 경우 0에서 시작)
-            new_record = {}
+            row_data = [now_str, action_label, st.session_state['user_name']]
             for item in ALL_ITEMS:
-                curr_val = int(last_row.get(item, 0)) if item in last_row else 0
-                if item == inc_item:
-                    new_record[item] = curr_val + inc_qty
+                if item == target_item:
+                    row_data.append(record_qty)
                 else:
-                    new_record[item] = curr_val
+                    row_data.append(0) # 해당 없는 품목은 0으로 기록
+            row_data.append(memo)
 
-            row = [f"{now_str} (입고: {inc_item} +{inc_qty})", st.session_state['user_name']] + [new_record[i] for i in ALL_ITEMS]
-            ws_inventory.append_row(row)
-            st.success(f"🎉 [{inc_item}] {inc_qty}개 입고 완료! (누적 재고: {new_record[inc_item]})")
+            ws_inventory.append_row(row_data)
+            st.success(f"🎉 [{target_item}] {qty}개 {action_label} 등록 완료! (비고: {memo})")
+            st.rerun()
 
-    # 탭 3: 현황 조회
+    # 탭 3: 현황 및 누적 계산
     with tab3:
-        df_i = pd.DataFrame(ws_inventory.get_all_records())
-        st.dataframe(df_i, use_container_width=True)
+        df_i = get_safe_inventory_df()
+        
+        if df_i.empty:
+            st.info("등록된 재고 데이터가 없습니다.")
+        else:
+            st.subheader("📊 현재 계산 재고")
+            
+            # 가장 최근 '실사' 행 위치 찾기
+            df_silsa = df_i[df_i["구분"] == "실사"]
+            
+            if not df_silsa.empty:
+                last_silsa_idx = df_silsa.index[-1]
+                last_silsa_date = df_i.loc[last_silsa_idx, "일시"]
+                st.caption(f"💡 최근 실사일({last_silsa_date}) 이후의 입출고 내역을 자동으로 합산한 현재 재고입니다.")
+                
+                # 최근 실사 이후의 모든 데이터 누적 합산 (실사값 + 입고값 - 출고값)
+                df_calc = df_i.loc[last_silsa_idx:].copy()
+                
+                current_stock = {}
+                for item in ALL_ITEMS:
+                    if item in df_calc.columns:
+                        # 숫자형으로 변환 후 합산
+                        current_stock[item] = pd.to_numeric(df_calc[item], errors='coerce').fillna(0).sum()
+                    else:
+                        current_stock[item] = 0
+                
+                # 요약 대시보드 표시
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("##### 📄 주요 소모품 재고")
+                    df_c_stock = pd.DataFrame([{"품목": k, "현재재고(BOX)": int(v)} for k, v in current_stock.items() if k in CONSUMABLES])
+                    st.dataframe(df_c_stock, use_container_width=True, hide_index=True)
+                with col2:
+                    st.markdown("##### 💻 비품/기기 재고")
+                    df_e_stock = pd.DataFrame([{"품목": k, "현재재고(개)": int(v)} for k, v in current_stock.items() if k in EQUIPMENT])
+                    st.dataframe(df_e_stock, use_container_width=True, hide_index=True)
+            else:
+                st.warning("⚠️ 등록된 '마감 실사' 데이터가 없습니다. 먼저 1번째 탭에서 마감 실사를 진행해 주세요.")
+
+            st.markdown("---")
+            st.subheader("📋 전체 이력 히스토리 (실사/입고/출고)")
+            st.dataframe(df_i, use_container_width=True)
