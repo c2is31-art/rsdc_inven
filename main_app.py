@@ -35,17 +35,9 @@ def get_gspread_client():
         "https://www.googleapis.com/auth/drive"
     ]
     
-    # Secrets 정보 불러오기
-    creds_dict = dict(st.secrets["gcp_service_account"])
-    
-    # private_key가 문자열일 경우 이중 역슬래시 및 양끝 따옴표 예외 처리
-    if "private_key" in creds_dict:
-        pk = str(creds_dict["private_key"])
-        pk = pk.replace("\\n", "\n")  # \\n 문자열을 실제 줄바꿈으로 변환
-        creds_dict["private_key"] = pk
-        
+    # st.secrets에서 gcp_service_account 딕셔너리를 직접 읽어옵니다.
     credentials = Credentials.from_service_account_info(
-        creds_dict,
+        st.secrets["gcp_service_account"],
         scopes=scopes
     )
     return gspread.authorize(credentials)
