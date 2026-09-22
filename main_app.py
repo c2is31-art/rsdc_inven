@@ -33,26 +33,52 @@ st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     
-    /* 전체 배경 및 기본 글자색 고정 */
+    /* 자동 번역 방지 및 기본 폰트 적용 */
     html, body, [class*="css"], .stApp {
         font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif !important;
         background-color: #ffffff !important;
         color: #1e293b !important;
     }
 
-    /* 입력창, 선택박스 등 라벨 글자색 고정 */
+    /* 사이드바 배경 및 전체 글자색 고정 */
+    [data-testid="stSidebar"] {
+        background-color: #f1f5f9 !important;
+    }
+    [data-testid="stSidebar"] * {
+        color: #0f172a !important;
+    }
+
+    /* 🚨 메뉴(Radio Button) 글자색 및 선택 항목 강제 고정 */
+    [data-testid="stRadio"] label p {
+        color: #0f172a !important;
+        font-weight: 600 !important;
+        font-size: 1rem !important;
+    }
+
+    /* 라디오 버튼 선택된 항목 배경 및 글자 강조 */
+    [data-testid="stRadio"] div[role="radiogroup"] > label {
+        padding: 8px 12px;
+        border-radius: 8px;
+        margin-bottom: 4px;
+        transition: background-color 0.2s;
+    }
+    [data-testid="stRadio"] div[role="radiogroup"] > label:hover {
+        background-color: #e2e8f0 !important;
+    }
+
+    /* 일반 입력창/라벨 글자색 고정 */
     label, p, span, h1, h2, h3, h4, h5, h6 {
         color: #0f172a !important;
     }
 
     /* Input 입력 박스 배경 및 글자색 보장 */
     .stTextInput input, .stSelectbox div[data-baseweb="select"], .stNumberInput input, .stTextArea textarea {
-        background-color: #f8fafc !important;
+        background-color: #ffffff !important;
         color: #0f172a !important;
         border: 1px solid #cbd5e1 !important;
     }
 
-    /* 버튼 스타일 및 글자색 */
+    /* 버튼 스타일 */
     .stButton>button {
         border-radius: 8px;
         font-weight: 600;
