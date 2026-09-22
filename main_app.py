@@ -8,7 +8,7 @@ from datetime import datetime
 # 0. 페이지 기본 및 CSS 스타일링 설정 (모바일/태블릿 반응형)
 # ==========================================
 st.set_page_config(
-    page_title="러셀대치 학원 보수요청/재고 관리 시스템", 
+    page_title="러셀대치학원 시설보수 및 재고관리 시스템", 
     page_icon="🏢",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -155,7 +155,7 @@ if "user_role" not in st.session_state:
 # 1. 로그인 & 회원가입 모듈
 # ==========================================
 if not st.session_state["logged_in"]:
-    st.markdown("<h2 style='text-align: center; color: #1e3a8a;'>🏢 러셀대치학원 통합 관리 시스템</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center; color: #1e3a8a;'>🏢 러셀대치학원 시설보수 및 재고관리 시스템</h2>", unsafe_allow_html=True)
     st.caption("<p style='text-align: center;'>학원 시설 및 재고 관리를 위해 로그인해 주세요.</p>", unsafe_allow_html=True)
 
     tab_login, tab_signup, tab_debug = st.tabs(["🔑 로그인", "📝 회원가입", "🔍 등록 회원 확인"])
@@ -227,7 +227,7 @@ if not st.session_state["logged_in"]:
 # ==========================================
 # 2. 사이드바 및 권한별 메뉴 구성
 # ==========================================
-st.sidebar.markdown(f"### 🏢 러셀대치 통합시스템")
+st.sidebar.markdown(f"### 🏢 러셀대치학원 시스템")
 st.sidebar.info(f"👤 **{st.session_state['user_name']}** 님\n\n📌 **권한:** `{st.session_state['user_role']}`")
 
 if st.sidebar.button("🚪 로그아웃", use_container_width=True):
@@ -258,7 +258,6 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
     with tab1:
         st.subheader("📍 요청 유형 및 상세 내용 입력")
         
-        # 요청 종류 구분 (시설 보수 VS 물품 구매)
         request_type = st.radio("요청 유형 선택", ["🔧 시설 보수 요청", "🛒 신규 물품/비품 구매 요청"], horizontal=True)
         
         space_category = st.selectbox("1. 공간 구분 선택", list(SPACES.keys()))
