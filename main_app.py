@@ -99,7 +99,7 @@ if "user_phone" not in st.session_state: st.session_state["user_phone"] = ""
 if "user_role" not in st.session_state: st.session_state["user_role"] = ""
 
 # ==========================================
-# 1. 로그인 & 회원가입
+# 1. 로그인 & 회원가입 (구글 시트 연동 보완판)
 # ==========================================
 if not st.session_state["logged_in"]:
     st.markdown("<h2 style='text-align: center; color: #1e3a8a;'>🏢 러셀대치학원 시설보수 및 재고관리 시스템</h2>", unsafe_allow_html=True)
@@ -107,48 +107,73 @@ if not st.session_state["logged_in"]:
 
     with tab_login:
         st.subheader("로그인")
-        login_name = st.text_input("이름", key="l_name")
-        login_phone = st.text_input("전화번호", type="password", key="l_phone")
+        login_name = st.text_input("이름", key="l_name", placeholder="예: 홍길동")
+        login_phone = st.text_input("전화번호", type="password", key="l_phone", placeholder="숫자만 입력 (예: 01012345678)")
         
         if st.button("로그인하기", use_container_width=True):
             c_name = login_name.strip()
             c_phone = clean_phone(login_phone)
             
-            users_data = ws_users.get_all_records()
-            df_u = pd.DataFrame(users_data)
-            
-            matched = None
-            if not df_u.empty:
-                for idx, row in df_u.iterrows():
-                    if str(row.get("이름","")).strip() == c_name and clean_phone(row.get("전화번호","")) == c_phone:
-                        matched = row
-                        break
-            
-            if matched is not None:
-                st.session_state["logged_in"] = True
-                st.session_state["user_name"] = c_name
-                st.session_state["user_phone"] = c_phone
-                st.session_state["user_role"] = str(matched.get("분류",""))
-                st.success(f"🎉 {c_name}님 환영합니다!")
-                st.rerun()
+            if not c_name or not c_phone:
+                st.error("이름과 전화번호를 모두 입력해 주세요.")
             else:
-                st.error("이름 또는 전화번호가 일치하지 않습니다.")
+                # 구글 시트에서 회원 목록 불러오기
+                users_data = ws_users.get_all_records()
+                df_u = pd.DataFrame(users_data)
+                
+                matched = None
+                if not df_u.empty:
+                    for idx, row in df_u.iterrows():
+                        # 이름(공백제거) 및 전화번호(숫자만 extraction) 비교
+                        db_name = str(row.get("이름", "")).strip()
+                        db_phone = clean_phone(str(row.get("전화번호", "")))
+                        
+                        if db_name == c_name and db_phone == c_phone:
+                            matched = row
+                            break
+                
+                if matched is not None:
+                    st.session_state["logged_in"] = True
+                    st.session_state["user_name"] = c_name
+                    st.session_state["user_phone"] = c_phone
+                    st.session_state["user_role"] = str(matched.get("분류", "직원")).strip()
+                    st.success(f"🎉 {c_name}님 환영합니다!")
+                    st.rerun()
+                else:
+                    st.error("이름 또는 전화번호가 일치하지 않습니다. (등록된 정보와 동일하게 입력했는지 확인해 주세요)")
 
     with tab_signup:
         st.subheader("신규 회원가입")
-        signup_role = st.selectbox("구분", ["교무팀", "조교", "직원", "강사"])
-        signup_name = st.text_input("이름", key="s_name")
-        signup_phone = st.text_input("전화번호", key="s_phone")
+        signup_role = st.selectbox("구분 (직분 선택)", ["교무팀", "조교", "직원", "강사"])
+        signup_name = st.text_input("이름", key="s_name", placeholder="예: 홍길동")
+        signup_phone = st.text_input("전화번호", key="s_phone", placeholder="예: 01012345678")
 
         if st.button("회원가입 완료", use_container_width=True):
             c_name = signup_name.strip()
             c_phone = clean_phone(signup_phone)
-            if c_name and len(c_phone) >= 8:
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-                ws_users.append_row([c_name, c_phone, signup_role, now_str])
-                st.success("✅ 회원가입이 완료되었습니다! 구글 시트에 안전히 저장되었습니다.")
+            
+            if not c_name:
+                st.error("이름을 입력해 주세요.")
+            elif len(c_phone) < 8:
+                st.error("올바른 전화번호를 입력해 주세요.")
             else:
-                st.error("올바른 정보를 입력해 주세요.")
+                # 중복 가입 체크
+                users_data = ws_users.get_all_records()
+                df_u = pd.DataFrame(users_data)
+                is_dup = False
+                if not df_u.empty:
+                    for idx, row in df_u.iterrows():
+                        if str(row.get("이름", "")).strip() == c_name and clean_phone(str(row.get("전화번호", ""))) == c_phone:
+                            is_dup = True
+                            break
+                
+                if is_dup:
+                    st.warning("이미 가입된 회원 정보입니다. 로그인 탭에서 로그인해 주세요.")
+                else:
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    # 구글 시트에 전화번호가 숫자로 변환되어 앞자리 0이 안 지워지도록 큰따옴표/작은따옴표 문자열 처리하여 추가
+                    ws_users.append_row([c_name, f"'{c_phone}", signup_role, now_str])
+                    st.success("✅ 회원가입 완료! 로그인 탭으로 이동하여 로그인해 주세요.")
     st.stop()
 
 # ==========================================
