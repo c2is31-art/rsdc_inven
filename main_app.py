@@ -1,12 +1,19 @@
 import streamlit as st
 import pandas as pd
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
+
+# ==========================================
+# 🇰🇷 한국 표준시(KST) 구하기 함수 (새로 추가)
+# ==========================================
+def get_kst_now():
+    kst = timezone(timedelta(hours=9))
+    return datetime.now(kst).strftime("%Y-%m-%d %H:%M")
 
 # ==========================================
 # 0. 페이지 기본 설정 및 구글 API 연동
@@ -157,7 +164,7 @@ if not st.session_state["logged_in"]:
             c_name = signup_name.strip()
             c_phone = clean_phone(signup_phone)
             if c_name and len(c_phone) >= 8:
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                now_str = get_kst_now()
                 ws_users.append_row([c_name, f"'{c_phone}", signup_role, now_str])
                 st.success("✅ 회원가입 완료! 로그인 탭에서 로그인해 주세요.")
             else:
@@ -199,7 +206,7 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
                 if details.strip():
                     with st.spinner("사진 업로드 및 요청 저장 중..."):
                         photo_url = upload_photo_to_drive(photo_file)
-                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        now_str = get_kst_now()
                         ws_facility.append_row([now_str, space_cat, det_space, f"[보수] {cat}", details, photo_url, "접수완료", st.session_state['user_name']])
                     st.success("✅ 구글 시트에 요청과 사진 정보가 저장되었습니다.")
                 else:
@@ -247,7 +254,7 @@ elif menu == "📦 물품/비품 재고 관리":
         st.caption("※ 실제 창고에 남아있는 실사 수량을 입력합니다. (이후 입고/출고 계산의 기준점이 됩니다)")
         
         with st.form("inv_form"):
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            now_str = get_kst_now()
             st.write(f"등록일시: **{now_str}** | 작성자: **{st.session_state['user_name']}**")
             
             st.markdown("#### 📄 소모품 (BOX)")
@@ -275,7 +282,7 @@ elif menu == "📦 물품/비품 재고 관리":
         memo = st.text_input("비고/메모 (예: OO문구 구매분, 3층 자습관 교체용 등)", placeholder="사유 입력")
 
         if st.button("내역 등록하기", use_container_width=True):
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            now_str = get_kst_now()
             is_in = "입고" in inout_type
             action_label = "입고" if is_in else "출고"
             
