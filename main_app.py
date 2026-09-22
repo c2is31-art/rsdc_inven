@@ -4,9 +4,12 @@ import re
 from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+import io
 
 # ==========================================
-# 0. 페이지 기본 및 구글 시트 연동 설정
+# 0. 페이지 기본 설정 및 구글 API 연동
 # ==========================================
 st.set_page_config(
     page_title="러셀대치학원 시설보수 및 재고관리 시스템", 
@@ -27,40 +30,52 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 구글 시트 API 연결 함수
+# 구글 API 연결 함수
 @st.cache_resource
-def get_gspread_client():
+def get_google_services():
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-    
-    # Secrets 정보 불러오기
     creds_dict = dict(st.secrets["gcp_service_account"])
-    
-    # private_key 자동 줄바꿈 문자로 보정
     if "private_key" in creds_dict:
         pk = str(creds_dict["private_key"])
         pk = pk.replace("\\n", "\n")
         creds_dict["private_key"] = pk
         
-    credentials = Credentials.from_service_account_info(
-        creds_dict,
-        scopes=scopes
-    )
-    return gspread.authorize(credentials)
+    credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    gc = gspread.authorize(credentials)
+    drive_service = build('drive', 'v3', credentials=credentials)
+    return gc, drive_service
 
-# 구글 시트 데이터베이스 연동 실행
 try:
-    gc = get_gspread_client()
-    # 구글 드라이브에 만드신 구글 시트 파일명
+    gc, drive_service = get_google_services()
     sh = gc.open("러셀대치_통합DB")
     ws_users = sh.worksheet("users")
     ws_facility = sh.worksheet("facility")
     ws_inventory = sh.worksheet("inventory")
 except Exception as e:
-    st.error(f"⚠️ 구글 시트 연동에 실패했습니다. Secrets 설정 및 시트 이름을 확인해 주세요: {e}")
+    st.error(f"⚠️ 구글 시트 및 드라이브 연동에 실패했습니다: {e}")
     st.stop()
+
+# 구글 드라이브 사진 업로드 함수
+def upload_photo_to_drive(uploaded_file):
+    if uploaded_file is None:
+        return ""
+    try:
+        file_metadata = {'name': f"facility_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uploaded_file.name}"}
+        media = MediaIoBaseUpload(io.BytesIO(uploaded_file.getvalue()), mimetype=uploaded_file.type)
+        file = drive_service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
+        
+        # 누구나 열람 가능하도록 권한 변경
+        drive_service.permissions().create(
+            fileId=file.get('id'),
+            body={'role': 'reader', 'type': 'anyone'}
+        ).execute()
+        return file.get('webViewLink', '')
+    except Exception as e:
+        st.warning(f"사진 업로드 실패: {e}")
+        return ""
 
 def clean_phone(phone_str):
     if pd.isna(phone_str): return ""
@@ -99,7 +114,7 @@ if "user_phone" not in st.session_state: st.session_state["user_phone"] = ""
 if "user_role" not in st.session_state: st.session_state["user_role"] = ""
 
 # ==========================================
-# 1. 로그인 & 회원가입 (구글 시트 연동 보완판)
+# 1. 로그인 & 회원가입
 # ==========================================
 if not st.session_state["logged_in"]:
     st.markdown("<h2 style='text-align: center; color: #1e3a8a;'>🏢 러셀대치학원 시설보수 및 재고관리 시스템</h2>", unsafe_allow_html=True)
@@ -107,73 +122,46 @@ if not st.session_state["logged_in"]:
 
     with tab_login:
         st.subheader("로그인")
-        login_name = st.text_input("이름", key="l_name", placeholder="예: 홍길동")
-        login_phone = st.text_input("전화번호", type="password", key="l_phone", placeholder="숫자만 입력 (예: 01012345678)")
+        login_name = st.text_input("이름", key="l_name")
+        login_phone = st.text_input("전화번호", type="password", key="l_phone")
         
         if st.button("로그인하기", use_container_width=True):
             c_name = login_name.strip()
             c_phone = clean_phone(login_phone)
             
-            if not c_name or not c_phone:
-                st.error("이름과 전화번호를 모두 입력해 주세요.")
+            df_u = pd.DataFrame(ws_users.get_all_records())
+            matched = None
+            if not df_u.empty:
+                for idx, row in df_u.iterrows():
+                    if str(row.get("이름","")).strip() == c_name and clean_phone(str(row.get("전화번호",""))) == c_phone:
+                        matched = row
+                        break
+            
+            if matched is not None:
+                st.session_state["logged_in"] = True
+                st.session_state["user_name"] = c_name
+                st.session_state["user_phone"] = c_phone
+                st.session_state["user_role"] = str(matched.get("분류","직원")).strip()
+                st.success(f"🎉 {c_name}님 환영합니다!")
+                st.rerun()
             else:
-                # 구글 시트에서 회원 목록 불러오기
-                users_data = ws_users.get_all_records()
-                df_u = pd.DataFrame(users_data)
-                
-                matched = None
-                if not df_u.empty:
-                    for idx, row in df_u.iterrows():
-                        # 이름(공백제거) 및 전화번호(숫자만 extraction) 비교
-                        db_name = str(row.get("이름", "")).strip()
-                        db_phone = clean_phone(str(row.get("전화번호", "")))
-                        
-                        if db_name == c_name and db_phone == c_phone:
-                            matched = row
-                            break
-                
-                if matched is not None:
-                    st.session_state["logged_in"] = True
-                    st.session_state["user_name"] = c_name
-                    st.session_state["user_phone"] = c_phone
-                    st.session_state["user_role"] = str(matched.get("분류", "직원")).strip()
-                    st.success(f"🎉 {c_name}님 환영합니다!")
-                    st.rerun()
-                else:
-                    st.error("이름 또는 전화번호가 일치하지 않습니다. (등록된 정보와 동일하게 입력했는지 확인해 주세요)")
+                st.error("이름 또는 전화번호가 일치하지 않습니다.")
 
     with tab_signup:
         st.subheader("신규 회원가입")
-        signup_role = st.selectbox("구분 (직분 선택)", ["교무팀", "조교", "직원", "강사"])
-        signup_name = st.text_input("이름", key="s_name", placeholder="예: 홍길동")
-        signup_phone = st.text_input("전화번호", key="s_phone", placeholder="예: 01012345678")
+        signup_role = st.selectbox("구분", ["교무팀", "조교", "직원", "강사"])
+        signup_name = st.text_input("이름", key="s_name")
+        signup_phone = st.text_input("전화번호", key="s_phone")
 
         if st.button("회원가입 완료", use_container_width=True):
             c_name = signup_name.strip()
             c_phone = clean_phone(signup_phone)
-            
-            if not c_name:
-                st.error("이름을 입력해 주세요.")
-            elif len(c_phone) < 8:
-                st.error("올바른 전화번호를 입력해 주세요.")
+            if c_name and len(c_phone) >= 8:
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                ws_users.append_row([c_name, f"'{c_phone}", signup_role, now_str])
+                st.success("✅ 회원가입 완료! 로그인 탭에서 로그인해 주세요.")
             else:
-                # 중복 가입 체크
-                users_data = ws_users.get_all_records()
-                df_u = pd.DataFrame(users_data)
-                is_dup = False
-                if not df_u.empty:
-                    for idx, row in df_u.iterrows():
-                        if str(row.get("이름", "")).strip() == c_name and clean_phone(str(row.get("전화번호", ""))) == c_phone:
-                            is_dup = True
-                            break
-                
-                if is_dup:
-                    st.warning("이미 가입된 회원 정보입니다. 로그인 탭에서 로그인해 주세요.")
-                else:
-                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    # 구글 시트에 전화번호가 숫자로 변환되어 앞자리 0이 안 지워지도록 큰따옴표/작은따옴표 문자열 처리하여 추가
-                    ws_users.append_row([c_name, f"'{c_phone}", signup_role, now_str])
-                    st.success("✅ 회원가입 완료! 로그인 탭으로 이동하여 로그인해 주세요.")
+                st.error("올바른 정보를 입력해 주세요.")
     st.stop()
 
 # ==========================================
@@ -191,7 +179,7 @@ menu_options = ["🛠️ 시설 보수 및 물품 구매 요청", "📦 물품/�
 menu = st.sidebar.radio("메뉴 이동", menu_options)
 
 # ==========================================
-# 3. 요청 등록 및 시트 저장
+# 3. 요청 등록 (사진 첨부 기능 포함)
 # ==========================================
 if menu == "🛠️ 시설 보수 및 물품 구매 요청":
     st.title("🛠️ 시설 보수 및 물품 구매 요청")
@@ -204,51 +192,93 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
 
         if req_type == "🔧 시설 보수 요청":
             cat = st.selectbox("보수 분류", [c for c in CATEGORY_BY_SPACE[space_cat] if c != "신규 물품 구매 요청"])
-            details = st.text_area("상세 내용")
-            if st.button("제출하기", use_container_width=True):
+            details = st.text_area("상세 고장 내용")
+            photo_file = st.file_uploader("📷 현장 사진 첨부 (선택사항)", type=["png", "jpg", "jpeg"])
+
+            if st.button("보수 요청 제출", use_container_width=True):
                 if details.strip():
-                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    ws_facility.append_row([now_str, space_cat, det_space, f"[보수] {cat}", details, "", "접수완료", st.session_state['user_name']])
-                    st.success("✅ 구글 시트에 영구 저장되었습니다.")
+                    with st.spinner("사진 업로드 및 요청 저장 중..."):
+                        photo_url = upload_photo_to_drive(photo_file)
+                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        ws_facility.append_row([now_str, space_cat, det_space, f"[보수] {cat}", details, photo_url, "접수완료", st.session_state['user_name']])
+                    st.success("✅ 구글 시트에 요청과 사진 정보가 저장되었습니다.")
                 else:
-                    st.error("상세 내용을 입력해 주세요.")
+                    st.error("상세 고장 내용을 입력해 주세요.")
         else:
             item_n = st.text_input("구매 물품명")
             item_q = st.number_input("수량", min_value=1, value=1)
             item_r = st.text_area("구매 사유")
+            photo_file = st.file_uploader("📷 참고 사진/참고자료 첨부 (선택사항)", type=["png", "jpg", "jpeg"])
+
             if st.button("구매 요청 제출", use_container_width=True):
                 if item_n.strip() and item_r.strip():
-                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    full_d = f"[구매물품] {item_n} ({item_q}개)\n[사유] {item_r}"
-                    ws_facility.append_row([now_str, space_cat, det_space, "[구매요청] 물품구매", full_d, "", "접수완료", st.session_state['user_name']])
-                    st.success("✅ 구글 시트에 영구 저장되었습니다.")
+                    with st.spinner("요청 저장 중..."):
+                        photo_url = upload_photo_to_drive(photo_file)
+                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        full_d = f"[구매물품] {item_n} ({item_q}개)\n[사유] {item_r}"
+                        ws_facility.append_row([now_str, space_cat, det_space, "[구매요청] 물품구매", full_d, photo_url, "접수완료", st.session_state['user_name']])
+                    st.success("✅ 구글 시트에 구매 요청이 저장되었습니다.")
+                else:
+                    st.error("물품명과 사유를 모두 입력해 주세요.")
 
     with tab2:
-        records = ws_facility.get_all_records()
-        df_f = pd.DataFrame(records)
+        df_f = pd.DataFrame(ws_facility.get_all_records())
         st.dataframe(df_f, use_container_width=True)
 
 # ==========================================
-# 4. 재고 관리 및 시트 저장
+# 4. 재고 관리 (입고 기능 포함)
 # ==========================================
 elif menu == "📦 물품/비품 재고 관리":
     st.title("📦 재고 관리 System")
-    tab1, tab2 = st.tabs(["📝 마감 재고 등록", "📊 현황 조회"])
+    tab1, tab2, tab3 = st.tabs(["📝 마감 재고 실사", "📥 입고 처리 (수량 추가)", "📊 현황 조회"])
 
+    # 탭 1: 마감 재고 입력
     with tab1:
+        st.subheader("일일 마감 실사 재고 입력")
         with st.form("inv_form"):
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             st.write(f"등록일시: {now_str}")
             
-            c_vals = {item: st.number_input(f"{item} (BOX)", min_value=0, value=0) for item in CONSUMABLES}
-            e_vals = {item: st.number_input(f"{item} (개)", min_value=0, value=0) for item in EQUIPMENT}
+            st.markdown("#### 📄 소모품 (BOX)")
+            c_vals = {item: st.number_input(f"{item}", min_value=0, value=0, key=f"c_{item}") for item in CONSUMABLES}
+            
+            st.markdown("#### 💻 비품/기기 (개)")
+            e_vals = {item: st.number_input(f"{item}", min_value=0, value=0, key=f"e_{item}") for item in EQUIPMENT}
 
-            if st.form_submit_button("마감 재고 제출"):
+            if st.form_submit_button("마감 재고 저장"):
                 all_v = {**c_vals, **e_vals}
                 row = [now_str, st.session_state['user_name']] + [all_v[i] for i in ALL_ITEMS]
                 ws_inventory.append_row(row)
-                st.success("✅ 구글 시트에 재고 기록이 반영되었습니다.")
+                st.success("✅ 마감 재고가 기록되었습니다.")
 
+    # 탭 2: 물품 입고 처리 (신규 추가된 입고 기능)
     with tab2:
+        st.subheader("📥 물품 신규 입고 등록")
+        inc_item = st.selectbox("입고 대상 물품 선택", ALL_ITEMS)
+        inc_qty = st.number_input("입고 수량", min_value=1, value=1)
+        inc_memo = st.text_input("입고 비고/메모 (예: OO문구 구매분)", placeholder="선택 사항")
+
+        if st.button("입고 반영하기", use_container_width=True):
+            df_inv = pd.DataFrame(ws_inventory.get_all_records())
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            
+            # 최신 재고 데이터 가져오기
+            last_row = df_inv.iloc[-1].to_dict() if not df_inv.empty else {}
+            
+            # 신규 재고 계산 (최초일 경우 0에서 시작)
+            new_record = {}
+            for item in ALL_ITEMS:
+                curr_val = int(last_row.get(item, 0)) if item in last_row else 0
+                if item == inc_item:
+                    new_record[item] = curr_val + inc_qty
+                else:
+                    new_record[item] = curr_val
+
+            row = [f"{now_str} (입고: {inc_item} +{inc_qty})", st.session_state['user_name']] + [new_record[i] for i in ALL_ITEMS]
+            ws_inventory.append_row(row)
+            st.success(f"🎉 [{inc_item}] {inc_qty}개 입고 완료! (누적 재고: {new_record[inc_item]})")
+
+    # 탭 3: 현황 조회
+    with tab3:
         df_i = pd.DataFrame(ws_inventory.get_all_records())
         st.dataframe(df_i, use_container_width=True)
