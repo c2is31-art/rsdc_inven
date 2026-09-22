@@ -8,6 +8,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
 
+# 자동 번역으로 인한 글자 깨짐 방지
+st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
+
 # ==========================================
 # 🇰🇷 한국 표준시(KST) 구하기 함수 (새로 추가)
 # ==========================================
@@ -29,11 +32,38 @@ st.set_page_config(
 st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-    html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
-    .stApp { background-color: #f8f9fa; }
-    .stButton>button { border-radius: 8px; font-weight: 600; background-color: #1e3a8a; color: #ffffff; border: none; }
-    .stButton>button:hover { background-color: #1d4ed8; color: #ffffff; }
-    [data-testid="stMetricValue"] { font-size: 1.5rem !important; font-weight: 700; color: #1e3a8a; }
+    
+    /* 전체 배경 및 기본 글자색 고정 */
+    html, body, [class*="css"], .stApp {
+        font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif !important;
+        background-color: #ffffff !important;
+        color: #1e293b !important;
+    }
+
+    /* 입력창, 선택박스 등 라벨 글자색 고정 */
+    label, p, span, h1, h2, h3, h4, h5, h6 {
+        color: #0f172a !important;
+    }
+
+    /* Input 입력 박스 배경 및 글자색 보장 */
+    .stTextInput input, .stSelectbox div[data-baseweb="select"], .stNumberInput input, .stTextArea textarea {
+        background-color: #f8fafc !important;
+        color: #0f172a !important;
+        border: 1px solid #cbd5e1 !important;
+    }
+
+    /* 버튼 스타일 및 글자색 */
+    .stButton>button {
+        border-radius: 8px;
+        font-weight: 600;
+        background-color: #1e3a8a !important;
+        color: #ffffff !important;
+        border: none;
+    }
+    .stButton>button:hover {
+        background-color: #1d4ed8 !important;
+        color: #ffffff !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
