@@ -8,13 +8,15 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
+import time
+import extra_streamlit_components as stx  # 자동 로그인을 위한 쿠키 매니저
 
 # ==========================================
 # 📌 배포 전 확인사항 (Google Sheet 설정)
 # ==========================================
-# 1) [필수 아님, 있으면 더 안전함] "facility" 시트 A열에 "요청ID" 헤더를 새로 추가하면
+# 1) "facility" 시트 A열에 "요청ID" 헤더를 새로 추가하면
 #    요청 상태변경 시 행 위치가 아닌 고유ID로 안전하게 매칭됩니다.
-# 2) [선택] "config"라는 이름의 시트를 만들고 "카테고리" / "항목값" 두 컬럼을 두면,
+# 2) "config"라는 이름의 시트를 만들고 "카테고리" / "항목값" 두 컬럼을 두면,
 #    코드 수정 없이 소모품/비품/공간/보수분류 목록을 시트에서 직접 관리할 수 있습니다.
 # ==========================================
 
@@ -46,7 +48,7 @@ def col_letter(n):
 
 
 # ==========================================
-# 0. 페이지 기본 설정
+# 0. 페이지 기본 설정 및 쿠키 매니저 초기화
 # ==========================================
 st.set_page_config(
     page_title="러셀대치학원 시설보수 및 재고관리 시스템",
@@ -54,6 +56,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# 쿠키 매니저 생성
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_cookie_manager()
 
 # ==========================================
 # Custom CSS (디자인 및 시각성 개선)
@@ -288,13 +297,12 @@ except Exception as e:
     st.error(f"⚠️ 구글 시트 및 드라이브 연동에 실패했습니다: {e}")
     st.stop()
 
-# 선택적 "config" 시트 (없어도 앱은 정상 동작)
+# 선택적 "config" 시트
 try:
     ws_config = sh.worksheet("config")
 except Exception:
     ws_config = None
 
-# facility 시트에 "요청ID" 컬럼이 있는지 확인 (없으면 기존 방식 그대로 동작)
 try:
     FACILITY_HEADER = ws_facility.row_values(1)
 except Exception:
@@ -303,7 +311,7 @@ FACILITY_HAS_ID = "요청ID" in FACILITY_HEADER
 
 
 # ==========================================
-# 캐시된 데이터 읽기 (구글시트 API 쿼터 절약용, 20~60초 캐시)
+# 캐시된 데이터 읽기
 # ==========================================
 @st.cache_data(ttl=20, show_spinner=False)
 def get_facility_records():
@@ -328,7 +336,6 @@ def get_config_records():
 
 
 def find_facility_row_by_id(row_id):
-    """요청ID로 실제 시트의 행 번호를 찾는다 (없으면 None)"""
     try:
         cell = ws_facility.find(str(row_id))
         return cell.row
@@ -336,7 +343,6 @@ def find_facility_row_by_id(row_id):
         return None
 
 
-# 구글 드라이브 사진 업로드 함수 (용량 제한 + 자동 리사이즈)
 MAX_PHOTO_MB = 8
 
 def photo_too_large(uploaded_file):
@@ -388,7 +394,7 @@ def status_badge(status):
 
 
 # ==========================================
-# 물품/공간/분류 목록 — config 시트가 있으면 그 값을, 없으면 기본값을 사용
+# 물품/공간/분류 목록
 # ==========================================
 CONSUMABLES_BASE = [
     "A4용지", "A3용지", "B4용지", "미색A4용지", "미색A3용지",
@@ -398,7 +404,6 @@ CONSUMABLES_BASE = [
 ]
 
 FLOORS = ["2층", "6층", "7층"]
-
 CONSUMABLES_DEFAULT = [f"{item} ({floor})" for item in CONSUMABLES_BASE for floor in FLOORS]
 
 EQUIPMENT_DEFAULT = [
@@ -433,7 +438,6 @@ ALL_ITEMS = CONSUMABLES + EQUIPMENT
 SPACES = {k: _config_list(f"공간_{k}", v) for k, v in SPACES_DEFAULT.items()}
 CATEGORY_BY_SPACE = {k: _config_list(f"분류_{k}", v) for k, v in CATEGORY_BY_SPACE_DEFAULT.items()}
 
-# 품목별 재고부족 기준 (미설정 항목은 소모품 5 / 비품 2 기본값 사용)
 LOW_STOCK_THRESHOLDS = {"생수": 10, "물티슈": 5, "각티슈": 5}
 DEFAULT_LOW_STOCK = {"consumable": 5, "equipment": 2}
 
@@ -450,6 +454,24 @@ if "logged_in" not in st.session_state: st.session_state["logged_in"] = False
 if "user_name" not in st.session_state: st.session_state["user_name"] = ""
 if "user_phone" not in st.session_state: st.session_state["user_phone"] = ""
 if "user_role" not in st.session_state: st.session_state["user_role"] = ""
+
+
+# ==========================================
+# 🔑 자동 로그인 검증 (쿠키 기반)
+# ==========================================
+if not st.session_state["logged_in"]:
+    cookie_phone = cookie_manager.get(cookie="russel_user_phone")
+    if cookie_phone:
+        df_u = pd.DataFrame(get_users_records())
+        if not df_u.empty:
+            for idx, row in df_u.iterrows():
+                if clean_phone(str(row.get("전화번호", ""))) == clean_phone(cookie_phone):
+                    st.session_state["logged_in"] = True
+                    st.session_state["user_name"] = str(row.get("이름", "")).strip()
+                    st.session_state["user_phone"] = clean_phone(cookie_phone)
+                    st.session_state["user_role"] = str(row.get("분류", "직원")).strip()
+                    st.rerun()
+
 
 # ==========================================
 # 1. 로그인 & 회원가입
@@ -476,6 +498,7 @@ if not st.session_state["logged_in"]:
                 st.markdown("##### 로그인")
                 login_name = st.text_input("이름", placeholder="예: 홍길동")
                 login_phone = st.text_input("전화번호", type="password", placeholder="숫자만 입력 (- 없이)")
+                auto_login = st.checkbox("🔑 로그인 상태 유지 (자동 로그인)", value=True)
                 submitted = st.form_submit_button("로그인하기", use_container_width=True)
 
             if submitted:
@@ -498,6 +521,12 @@ if not st.session_state["logged_in"]:
                         st.session_state["user_name"] = c_name
                         st.session_state["user_phone"] = c_phone
                         st.session_state["user_role"] = str(matched.get("분류", "직원")).strip()
+
+                        # 자동 로그인 선택 시 쿠키 저장 (30일 유효)
+                        if auto_login:
+                            cookie_manager.set("russel_user_phone", c_phone, expires_at=datetime.now() + timedelta(days=30))
+                            time.sleep(0.2)
+
                         st.success(f"🎉 {c_name}님 환영합니다!")
                         st.rerun()
                     else:
@@ -529,7 +558,16 @@ if not st.session_state["logged_in"]:
                     now_str = get_kst_now()
                     ws_users.append_row([c_name, f"'{c_phone}", signup_role, now_str])
                     get_users_records.clear()
-                    st.success("✅ 회원가입 완료! 로그인 탭에서 로그인해 주세요.")
+                    
+                    # 가입 성공 시 자동으로 쿠키 설정 및 로그인 진행
+                    cookie_manager.set("russel_user_phone", c_phone, expires_at=datetime.now() + timedelta(days=30))
+                    time.sleep(0.2)
+                    st.session_state["logged_in"] = True
+                    st.session_state["user_name"] = c_name
+                    st.session_state["user_phone"] = c_phone
+                    st.session_state["user_role"] = signup_role
+                    st.success("✅ 회원가입 및 로그인 완료!")
+                    st.rerun()
     st.stop()
 
 # ==========================================
@@ -543,15 +581,21 @@ st.sidebar.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
+# 로그아웃 클릭 시 쿠키 제거 및 세션 초기화
 if st.sidebar.button("🚪 로그아웃", use_container_width=True):
+    cookie_manager.delete("russel_user_phone")
     st.session_state["logged_in"] = False
+    st.session_state["user_name"] = ""
+    st.session_state["user_phone"] = ""
+    st.session_state["user_role"] = ""
+    time.sleep(0.2)
     st.rerun()
 
 st.sidebar.markdown("---")
 
 user_role = st.session_state["user_role"]
-is_full_admin = (user_role == "교무팀")          # 시설요청 상태변경 + 재고관리 전체
-is_silsa_staff = (user_role == "조교")           # 마감 재고 실사만 가능
+is_full_admin = (user_role == "교무팀")
+is_silsa_staff = (user_role == "조교")
 can_access_inventory = is_full_admin or is_silsa_staff
 menu_options = ["📦 물품/비품 재고 관리", "🛠️ 시설 보수 및 물품 구매 요청"] if can_access_inventory else ["🛠️ 시설 보수 및 물품 구매 요청"]
 menu = st.sidebar.radio("메뉴 이동", menu_options)
@@ -651,7 +695,7 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
                 mask = df_view.astype(str).apply(lambda r: r.str.contains(keyword, case=False, na=False)).any(axis=1)
                 df_view = df_view[mask]
 
-            df_view = df_view.iloc[::-1]  # 최신 등록 건이 위로 오도록 정렬
+            df_view = df_view.iloc[::-1]
 
             m1, m2, m3 = st.columns(3)
             m1.metric("전체 요청", len(df_f))
@@ -720,7 +764,7 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
             )
 
 # ==========================================
-# 4. 재고 관리 (실사/입고/출고 분리 보완판 - 소수점 및 층별 구분 지원)
+# 4. 재고 관리
 # ==========================================
 elif menu == "📦 물품/비품 재고 관리":
     st.title("📦 재고 관리 System")
@@ -753,7 +797,7 @@ elif menu == "📦 물품/비품 재고 관리":
                 result[item] = float(pd.to_numeric(last_row.get(item, 0.0), errors="coerce") or 0.0)
         return result
 
-    # 탭 1: 마감 재고 실사 (소수점 입력 가능)
+    # 탭 1: 마감 재고 실사
     with tab1:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
         st.subheader("📝 일일 마감 실사 재고 입력")
@@ -797,7 +841,7 @@ elif menu == "📦 물품/비품 재고 관리":
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # 탭 2: 입고 및 출고 등록 (교무팀 전용, 소수점 입력 가능)
+    # 탭 2: 입고 및 출고 등록 (교무팀 전용)
     if is_full_admin:
         with tab2:
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
@@ -899,7 +943,7 @@ elif menu == "📦 물품/비품 재고 관리":
                     mask = df_hist.astype(str).apply(lambda r: r.str.contains(item_keyword, case=False, na=False)).any(axis=1)
                     df_hist = df_hist[mask]
 
-                df_hist = df_hist.iloc[::-1]  # 최신 이력이 위로 오도록 정렬
+                df_hist = df_hist.iloc[::-1]
 
                 st.dataframe(df_hist, use_container_width=True, hide_index=True)
                 st.download_button(
