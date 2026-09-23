@@ -57,10 +57,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 쿠키 매니저 생성
-@st.cache_resource
+# 쿠키 매니저 생성 (@st.cache_resource 제거 및 key 지정)
 def get_cookie_manager():
-    return stx.CookieManager()
+    return stx.CookieManager(key="cookie_manager")
 
 cookie_manager = get_cookie_manager()
 
