@@ -39,6 +39,11 @@ st.markdown("""
         font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif !important;
         background-color: #f8fafc !important;
         color: #1e293b !important;
+        font-size: 16px;
+        line-height: 1.65;
+        letter-spacing: -0.01em;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
     }
 
     /* 메인 컨텐츠 좌우 여백 */
@@ -98,7 +103,36 @@ st.markdown("""
     }
 
     /* 본문 라벨/텍스트 */
-    label, p, span, h1, h2, h3, h4, h5, h6 { color: #0f172a !important; }
+    label, p, span { color: #0f172a !important; letter-spacing: -0.01em; }
+
+    p { line-height: 1.65; font-size: 0.98rem; }
+    label { font-size: 0.92rem; font-weight: 600; }
+
+    /* 제목 계층 */
+    h1, h2, h3, h4, h5, h6 {
+        color: #0f172a !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.02em !important;
+        line-height: 1.35 !important;
+    }
+    h1 { font-size: 1.85rem !important; margin-bottom: 0.6rem !important; }
+    h2 { font-size: 1.4rem !important; }
+    h3 { font-size: 1.15rem !important; font-weight: 700 !important; }
+    h4, h5 { font-weight: 700 !important; }
+
+    /* 캡션/보조 텍스트 */
+    [data-testid="stCaptionContainer"], .stCaption {
+        font-size: 0.85rem !important;
+        color: #64748b !important;
+        letter-spacing: -0.005em;
+    }
+
+    /* 본문 표/숫자는 자간을 살짝 넓혀 가독성 확보 */
+    .stDataFrame, .stTable, [data-testid="stMetricValue"] {
+        letter-spacing: 0 !important;
+    }
+    [data-testid="stMetricValue"] { font-weight: 800 !important; }
+    [data-testid="stMetricLabel"] { font-weight: 600 !important; color: #64748b !important; }
 
     /* 입력 박스 */
     .stTextInput input, .stSelectbox div[data-baseweb="select"],
@@ -162,7 +196,7 @@ st.markdown("""
         color: #fff !important;
     }
     .brand-panel * { color: #fff !important; }
-    .brand-panel h1 { font-size: 1.6rem; margin-bottom: 8px; }
+    .brand-panel h1 { font-size: 1.6rem !important; margin-bottom: 8px !important; }
     .brand-panel p { color: #dbeafe !important; font-size: 0.92rem; line-height: 1.6; }
 
     .low-stock-pill {
@@ -180,7 +214,7 @@ st.markdown("""
     @media (max-width: 640px) {
         .block-container { padding-left: 1rem !important; padding-right: 1rem !important; }
         .brand-panel { padding: 24px 20px; border-radius: 14px; }
-        .brand-panel h1 { font-size: 1.25rem; }
+        .brand-panel h1 { font-size: 1.25rem !important; }
         .section-card { padding: 14px 16px; border-radius: 10px; }
         .user-card { padding: 10px 12px; }
         .stTabs [data-baseweb="tab"] { padding: 6px 10px; font-size: 0.85rem; }
@@ -381,7 +415,7 @@ st.sidebar.markdown("---")
 
 user_role = st.session_state["user_role"]
 is_admin = user_role in ["교무팀", "조교"]
-menu_options = ["🛠️ 시설 보수 및 물품 구매 요청", "📦 물품/비품 재고 관리"] if is_admin else ["🛠️ 시설 보수 및 물품 구매 요청"]
+menu_options = ["📦 물품/비품 재고 관리", "🛠️ 시설 보수 및 물품 구매 요청"] if is_admin else ["🛠️ 시설 보수 및 물품 구매 요청"]
 menu = st.sidebar.radio("메뉴 이동", menu_options)
 
 # ==========================================
