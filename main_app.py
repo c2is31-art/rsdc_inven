@@ -791,11 +791,11 @@ elif menu == "📦 물품/비품 재고 관리":
                 result[item] = float(pd.to_numeric(last_row.get(item, 0.0), errors="coerce") or 0.0)
         return result
 
-    # 탭 1: 마감 재고 실사 (층별 입력 & 총수량 자동 합산)
+    # 탭 1: 마감 재고 실사 (층별 입력 & 총수량 자동 합산 / 소수점 입력 가능)
     with tab1:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
         st.subheader("📝 일일 마감 실사 재고 입력")
-        st.caption("※ 소모품은 2층, 6층, 7층 수량을 입력하면 **총수량이 자동으로 계산**됩니다.")
+        st.caption("※ 소모품은 2층, 6층, 7층 수량을 입력하면 **총수량이 자동으로 계산**됩니다. (소수점 입력 가능)")
         now_str = get_kst_now()
         st.write(f"등록일시: **{now_str}** | 작성자: **{st.session_state['user_name']}**")
 
@@ -828,25 +828,25 @@ elif menu == "📦 물품/비품 재고 관리":
 
         st.markdown("##### 🧻 소모품 (층별 수량 입력)")
         
-        # 1. 먼저 data_editor로 사용자 입력 받기
+        # 1. 먼저 data_editor로 사용자 입력 받기 (step=0.1, format="%.2f"로 소수점 허용)
         edited_c = st.data_editor(
             df_c_input,
             use_container_width=True,
             hide_index=True,
             disabled=["소모품", "총 수량 (자동합산)"],
             column_config={
-                "2층 수량": st.column_config.NumberColumn("2층 수량", min_value=0.0, step=1.0, default=0.0, format="%.0f"),
-                "6층 수량": st.column_config.NumberColumn("6층 수량", min_value=0.0, step=1.0, default=0.0, format="%.0f"),
-                "7층 수량": st.column_config.NumberColumn("7층 수량", min_value=0.0, step=1.0, default=0.0, format="%.0f"),
-                "총 수량 (자동합산)": st.column_config.NumberColumn("총 수량 (자동합산)", format="%.0f")
+                "2층 수량": st.column_config.NumberColumn("2층 수량", min_value=0.0, step=0.1, default=0.0, format="%.2f"),
+                "6층 수량": st.column_config.NumberColumn("6층 수량", min_value=0.0, step=0.1, default=0.0, format="%.2f"),
+                "7층 수량": st.column_config.NumberColumn("7층 수량", min_value=0.0, step=0.1, default=0.0, format="%.2f"),
+                "총 수량 (자동합산)": st.column_config.NumberColumn("총 수량 (자동합산)", format="%.2f")
             },
             key="c_silsa_editor"
         )
 
-        # 2. 입력받은 값으로 총 수량 실시간 재계산 (None 처리 포함)
-        edited_c["2층 수량"] = edited_c["2층 수량"].fillna(0)
-        edited_c["6층 수량"] = edited_c["6층 수량"].fillna(0)
-        edited_c["7층 수량"] = edited_c["7층 수량"].fillna(0)
+        # 2. 입력받은 값으로 총 수량 실시간 재계산
+        edited_c["2층 수량"] = edited_c["2층 수량"].fillna(0.0)
+        edited_c["6층 수량"] = edited_c["6층 수량"].fillna(0.0)
+        edited_c["7층 수량"] = edited_c["7층 수량"].fillna(0.0)
         edited_c["총 수량 (자동합산)"] = edited_c["2층 수량"] + edited_c["6층 수량"] + edited_c["7층 수량"]
 
         st.markdown("---")
@@ -867,7 +867,7 @@ elif menu == "📦 물품/비품 재고 관리":
             hide_index=True,
             disabled=["비품명"],
             column_config={
-                "실사수량": st.column_config.NumberColumn("실사수량", min_value=0.0, step=1.0, format="%.0f")
+                "실사수량": st.column_config.NumberColumn("실사수량", min_value=0.0, step=0.1, format="%.2f")
             },
             key="e_silsa_editor"
         )
