@@ -849,6 +849,32 @@ elif menu == "📦 물품/비품 재고 관리":
         edited_c["7층 수량"] = edited_c["7층 수량"].fillna(0)
         edited_c["총 수량 (자동합산)"] = edited_c["2층 수량"] + edited_c["6층 수량"] + edited_c["7층 수량"]
 
+        st.markdown("---")
+        st.markdown("##### 💻 비품/기기 (수량 입력)")
+
+        equipment_rows = []
+        for item in EQUIPMENT:
+            equipment_rows.append({
+                "비품명": item,
+                "실사수량": float(last_vals.get(item, 0.0))
+            })
+
+        df_e_input = pd.DataFrame(equipment_rows)
+
+        edited_e = st.data_editor(
+            df_e_input,
+            use_container_width=True,
+            hide_index=True,
+            disabled=["비품명"],
+            column_config={
+                "실사수량": st.column_config.NumberColumn("실사수량", min_value=0.0, step=1.0, format="%.0f")
+            },
+            key="e_silsa_editor"
+        )
+
+        if st.button("마감 실사 저장", use_container_width=True):
+            sheet_values = {}
+
             # 소모품 각 층 및 총수량 매핑
             for _, r in edited_c.iterrows():
                 item = r["소모품"]
