@@ -9,16 +9,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
 import time
-import extra_streamlit_components as stx  # 자동 로그인을 위한 쿠키 매니저
-
-# ==========================================
-# 📌 배포 전 확인사항 (Google Sheet 설정)
-# ==========================================
-# 1) "facility" 시트 A열에 "요청ID" 헤더를 새로 추가하면
-#    요청 상태변경 시 행 위치가 아닌 고유ID로 안전하게 매칭됩니다.
-# 2) "config"라는 이름의 시트를 만들고 "카테고리" / "항목값" 두 컬럼을 두면,
-#    코드 수정 없이 소모품/비품/공간/보수분류 목록을 시트에서 직접 관리할 수 있습니다.
-# ==========================================
+import extra_streamlit_components as stx
 
 # 자동 번역으로 인한 글자 깨짐 방지
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
@@ -33,13 +24,11 @@ def get_kst_now():
 
 
 def generate_request_id():
-    """요청 건을 고유하게 식별하기 위한 ID (시간+랜덤값)"""
     ts = datetime.now(timezone(timedelta(hours=9))).strftime("%y%m%d%H%M%S")
     return f"{ts}-{uuid.uuid4().hex[:5]}"
 
 
 def col_letter(n):
-    """1부터 시작하는 컬럼 번호를 A1 표기 알파벳으로 변환"""
     letters = ""
     while n > 0:
         n, rem = divmod(n - 1, 26)
@@ -57,7 +46,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 쿠키 매니저 생성 (@st.cache_resource 제거 및 key 지정)
 def get_cookie_manager():
     return stx.CookieManager(key="cookie_manager")
 
@@ -86,7 +74,6 @@ st.markdown("""
         max-width: 1200px;
     }
 
-    /* 사이드바 스타일 */
     [data-testid="stSidebar"] {
         background-color: #0f172a !important;
         border-right: 1px solid #1e293b;
@@ -96,7 +83,6 @@ st.markdown("""
     }
     [data-testid="stSidebar"] hr { border-color: #334155 !important; }
 
-    /* 사이드바 전용 라디오 버튼 스타일 */
     [data-testid="stSidebar"] [data-testid="stRadio"] label p {
         color: #e2e8f0 !important;
         font-weight: 600 !important;
@@ -113,7 +99,6 @@ st.markdown("""
         background-color: #334155 !important;
     }
 
-    /* 🔥 본문 메인 영역 라디오 버튼 */
     .stMainBlockContainer [data-testid="stRadio"] label p,
     .stMainBlockContainer [data-testid="stRadio"] div[role="radiogroup"] label p {
         color: #0f172a !important;
@@ -310,19 +295,28 @@ FACILITY_HAS_ID = "요청ID" in FACILITY_HEADER
 
 
 # ==========================================
-# 캐시된 데이터 읽기
+# 캐시된 데이터 읽기 (예외 처리 추가)
 # ==========================================
 @st.cache_data(ttl=20, show_spinner=False)
 def get_facility_records():
-    return ws_facility.get_all_records()
+    try:
+        return ws_facility.get_all_records()
+    except Exception:
+        return []
 
 @st.cache_data(ttl=20, show_spinner=False)
 def get_inventory_records():
-    return ws_inventory.get_all_records()
+    try:
+        return ws_inventory.get_all_records()
+    except Exception:
+        return []
 
 @st.cache_data(ttl=60, show_spinner=False)
 def get_users_records():
-    return ws_users.get_all_records()
+    try:
+        return ws_users.get_all_records()
+    except Exception:
+        return []
 
 @st.cache_data(ttl=60, show_spinner=False)
 def get_config_records():
@@ -403,7 +397,12 @@ CONSUMABLES_BASE = [
 ]
 
 FLOORS = ["2층", "6층", "7층"]
-CONSUMABLES_DEFAULT = [f"{item} ({floor})" for item in CONSUMABLES_BASE for floor in FLOORS]
+
+# 구글 시트 열 헤더용 품목 전체 (층 구분 포함)
+ALL_SHEET_ITEMS = [f"{item} ({floor})" for item in CONSUMABLES_BASE for floor in FLOORS] + [
+    "노트북", "출결리더기", "보조배터리", "캠코더",
+    "삼각대 및 플레이트", "SD카드", "빔포인터", "빔리모콘", "에어컨리모콘"
+]
 
 EQUIPMENT_DEFAULT = [
     "노트북", "출결리더기", "보조배터리", "캠코더",
@@ -430,9 +429,8 @@ def _config_list(category, fallback):
              if str(r.get("카테고리", "")).strip() == category and str(r.get("항목값", "")).strip()]
     return items if items else fallback
 
-CONSUMABLES = _config_list("소모품", CONSUMABLES_DEFAULT)
+CONSUMABLES = _config_list("소모품", CONSUMABLES_BASE)
 EQUIPMENT = _config_list("비품", EQUIPMENT_DEFAULT)
-ALL_ITEMS = CONSUMABLES + EQUIPMENT
 
 SPACES = {k: _config_list(f"공간_{k}", v) for k, v in SPACES_DEFAULT.items()}
 CATEGORY_BY_SPACE = {k: _config_list(f"분류_{k}", v) for k, v in CATEGORY_BY_SPACE_DEFAULT.items()}
@@ -444,7 +442,7 @@ def get_threshold(item):
     base_item = item.split(" (")[0]
     if base_item in LOW_STOCK_THRESHOLDS:
         return LOW_STOCK_THRESHOLDS[base_item]
-    return DEFAULT_LOW_STOCK["consumable"] if item in CONSUMABLES else DEFAULT_LOW_STOCK["equipment"]
+    return DEFAULT_LOW_STOCK["consumable"] if base_item in CONSUMABLES else DEFAULT_LOW_STOCK["equipment"]
 
 STATUS_OPTIONS = ["접수완료", "처리중", "완료"]
 
@@ -521,7 +519,6 @@ if not st.session_state["logged_in"]:
                         st.session_state["user_phone"] = c_phone
                         st.session_state["user_role"] = str(matched.get("분류", "직원")).strip()
 
-                        # 자동 로그인 선택 시 쿠키 저장 (30일 유효)
                         if auto_login:
                             cookie_manager.set("russel_user_phone", c_phone, expires_at=datetime.now() + timedelta(days=30))
                             time.sleep(0.2)
@@ -558,7 +555,6 @@ if not st.session_state["logged_in"]:
                     ws_users.append_row([c_name, f"'{c_phone}", signup_role, now_str])
                     get_users_records.clear()
                     
-                    # 가입 성공 시 자동으로 쿠키 설정 및 로그인 진행
                     cookie_manager.set("russel_user_phone", c_phone, expires_at=datetime.now() + timedelta(days=30))
                     time.sleep(0.2)
                     st.session_state["logged_in"] = True
@@ -580,7 +576,6 @@ st.sidebar.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
-# 로그아웃 클릭 시 쿠키 제거 및 세션 초기화
 if st.sidebar.button("🚪 로그아웃", use_container_width=True):
     cookie_manager.delete("russel_user_phone")
     st.session_state["logged_in"] = False
@@ -600,7 +595,7 @@ menu_options = ["📦 물품/비품 재고 관리", "🛠️ 시설 보수 및 �
 menu = st.sidebar.radio("메뉴 이동", menu_options)
 
 # ==========================================
-# 3. 요청 등록 (사진 첨부 기능 포함)
+# 3. 요청 등록
 # ==========================================
 if menu == "🛠️ 시설 보수 및 물품 구매 요청":
     st.title("🛠️ 시설 보수 및 물품 구매 요청")
@@ -763,7 +758,7 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
             )
 
 # ==========================================
-# 4. 재고 관리
+# 4. 재고 관리 (층별 입력 및 총수량 자동 계산)
 # ==========================================
 elif menu == "📦 물품/비품 재고 관리":
     st.title("📦 재고 관리 System")
@@ -779,7 +774,7 @@ elif menu == "📦 물품/비품 재고 관리":
             records = get_inventory_records()
             return pd.DataFrame(records)
         except Exception:
-            all_cols = ["일시", "구분", "작성자"] + ALL_ITEMS + ["비고"]
+            all_cols = ["일시", "구분", "작성자"] + ALL_SHEET_ITEMS + ["비고"]
             return pd.DataFrame(columns=all_cols)
 
     def get_last_silsa_values():
@@ -791,66 +786,116 @@ elif menu == "📦 물품/비품 재고 관리":
             return {}
         last_row = df_silsa.iloc[-1]
         result = {}
-        for item in ALL_ITEMS:
+        for item in ALL_SHEET_ITEMS:
             if item in df_silsa.columns:
                 result[item] = float(pd.to_numeric(last_row.get(item, 0.0), errors="coerce") or 0.0)
         return result
 
-    # 탭 1: 마감 재고 실사
+    # 탭 1: 마감 재고 실사 (층별 입력 & 총수량 자동 합산)
     with tab1:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
         st.subheader("📝 일일 마감 실사 재고 입력")
-        st.caption("※ 실제 창고 및 각 층에 남아있는 실사 수량을 입력합니다. (소수점 입력 지원)")
+        st.caption("※ 소모품은 2층, 6층, 7층 수량을 입력하면 **총수량이 자동으로 계산**됩니다.")
         now_str = get_kst_now()
         st.write(f"등록일시: **{now_str}** | 작성자: **{st.session_state['user_name']}**")
 
         last_vals = get_last_silsa_values()
-        if last_vals:
-            st.caption("💡 직전 마감 실사값이 기본으로 채워져 있습니다. 실제 수량과 다르면 표에서 직접 수정해 주세요.")
 
-        base_df = pd.DataFrame({
-            "품목": ALL_ITEMS,
-            "구분": ["소모품(BOX/개)" if i in CONSUMABLES else "비품(개)" for i in ALL_ITEMS],
-            "실사수량": [float(last_vals.get(i, 0.0)) for i in ALL_ITEMS]
-        })
+        # 소모품 입력 데이터프레임 생성
+        consumable_rows = []
+        for item in CONSUMABLES:
+            v2 = float(last_vals.get(f"{item} (2층)", 0.0))
+            v6 = float(last_vals.get(f"{item} (6층)", 0.0))
+            v7 = float(last_vals.get(f"{item} (7층)", 0.0))
+            consumable_rows.append({
+                "소모품": item,
+                "2층 수량": v2,
+                "6층 수량": v6,
+                "7층 수량": v7,
+                "총 수량": v2 + v6 + v7
+            })
 
-        edited_inv = st.data_editor(
-            base_df,
+        df_c_input = pd.DataFrame(consumable_rows)
+
+        st.markdown("##### 🧻 소모품 (층별 수량 입력)")
+        edited_c = st.data_editor(
+            df_c_input,
             use_container_width=True,
             hide_index=True,
-            disabled=["품목", "구분"],
+            disabled=["소모품", "총 수량"],
             column_config={
-                "실사수량": st.column_config.NumberColumn(
-                    "실사수량", 
-                    min_value=0.0, 
-                    step=0.1, 
-                    format="%.2f"
-                )
+                "2층 수량": st.column_config.NumberColumn("2층 수량", min_value=0.0, step=0.1, format="%.2f"),
+                "6층 수량": st.column_config.NumberColumn("6층 수량", min_value=0.0, step=0.1, format="%.2f"),
+                "7층 수량": st.column_config.NumberColumn("7층 수량", min_value=0.0, step=0.1, format="%.2f"),
+                "총 수량": st.column_config.NumberColumn("총 수량 (자동합산)", format="%.2f")
             },
-            key="silsa_editor"
+            key="c_silsa_editor"
+        )
+
+        # 총 수량 동적 자동 계산 (화면 표시용)
+        edited_c["총 수량"] = edited_c["2층 수량"] + edited_c["6층 수량"] + edited_c["7층 수량"]
+
+        st.markdown("---")
+        st.markdown("##### 💻 비품/기기 (수량 입력)")
+
+        equipment_rows = []
+        for item in EQUIPMENT:
+            equipment_rows.append({
+                "비품명": item,
+                "실사수량": float(last_vals.get(item, 0.0))
+            })
+
+        df_e_input = pd.DataFrame(equipment_rows)
+
+        edited_e = st.data_editor(
+            df_e_input,
+            use_container_width=True,
+            hide_index=True,
+            disabled=["비품명"],
+            column_config={
+                "실사수량": st.column_config.NumberColumn("실사수량", min_value=0.0, step=0.1, format="%.2f")
+            },
+            key="e_silsa_editor"
         )
 
         if st.button("마감 실사 저장", use_container_width=True):
-            all_v = dict(zip(edited_inv["품목"], edited_inv["실사수량"]))
-            row = [now_str, "실사", st.session_state['user_name']] + [float(all_v[i]) for i in ALL_ITEMS] + ["정기 마감 실사"]
+            sheet_values = {}
+
+            # 소모품 각 층 및 총수량 매핑
+            for _, r in edited_c.iterrows():
+                item = r["소모품"]
+                sheet_values[f"{item} (2층)"] = float(r["2층 수량"])
+                sheet_values[f"{item} (6층)"] = float(r["6층 수량"])
+                sheet_values[f"{item} (7층)"] = float(r["7층 수량"])
+
+            # 비품 매핑
+            for _, r in edited_e.iterrows():
+                sheet_values[r["비품명"]] = float(r["실사수량"])
+
+            # 행 데이터 구성
+            row = [now_str, "실사", st.session_state['user_name']]
+            for item in ALL_SHEET_ITEMS:
+                row.append(sheet_values.get(item, 0.0))
+            row.append("정기 마감 실사")
+
             with st.spinner("저장 중..."):
                 ws_inventory.append_row(row)
                 get_inventory_records.clear()
-            st.success("✅ 마감 실사 데이터가 저장되었습니다.")
+            st.success("✅ 마감 실사 데이터가 정상 저장되었습니다!")
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # 탭 2: 입고 및 출고 등록 (교무팀 전용)
+    # 탭 2: 입고 및 출고 등록
     if is_full_admin:
         with tab2:
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
             st.subheader("📥 입고 / 📤 출고(사용) 등록")
-            st.caption("※ 수량 변동 내역(입고/사용)만 별도로 등록합니다. (소수점 입력 가능)")
+            st.caption("※ 수량 변동 내역(입고/사용)만 별도로 등록합니다.")
 
             inout_type = st.radio("작업 구분", ["📥 입고 (수량 추가)", "📤 출고 (사용/차감)"], horizontal=True)
             col1, col2 = st.columns(2)
             with col1:
-                target_item = st.selectbox("물품 선택", ALL_ITEMS)
+                target_item = st.selectbox("물품 선택", ALL_SHEET_ITEMS)
             with col2:
                 qty = st.number_input("수량", min_value=0.01, value=1.0, step=0.1, format="%.2f")
             memo = st.text_input("비고/메모 (예: OO문구 구매분, 2층 교체용 등)", placeholder="사유 입력")
@@ -862,7 +907,7 @@ elif menu == "📦 물품/비품 재고 관리":
                 record_qty = float(qty) if is_in else -float(qty)
 
                 row_data = [now_str, action_label, st.session_state['user_name']]
-                for item in ALL_ITEMS:
+                for item in ALL_SHEET_ITEMS:
                     row_data.append(record_qty if item == target_item else 0.0)
                 row_data.append(memo)
 
@@ -873,7 +918,7 @@ elif menu == "📦 물품/비품 재고 관리":
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-    # 탭 3: 현황 및 누적 계산 (교무팀 전용)
+    # 탭 3: 현황 및 누적 계산
     if is_full_admin:
         with tab3:
             df_i = get_safe_inventory_df()
@@ -892,17 +937,25 @@ elif menu == "📦 물품/비품 재고 관리":
                     df_calc = df_i.loc[last_silsa_idx:].copy()
 
                     current_stock = {}
-                    for item in ALL_ITEMS:
+                    for item in ALL_SHEET_ITEMS:
                         if item in df_calc.columns:
                             current_stock[item] = float(pd.to_numeric(df_calc[item], errors='coerce').fillna(0.0).sum())
                         else:
                             current_stock[item] = 0.0
 
-                    low_stock_items = [i for i in ALL_ITEMS if current_stock[i] <= get_threshold(i)]
+                    # 품목별 합산 재고 계산
+                    consumable_totals = {}
+                    for item in CONSUMABLES:
+                        total_q = (current_stock.get(f"{item} (2층)", 0.0) +
+                                   current_stock.get(f"{item} (6층)", 0.0) +
+                                   current_stock.get(f"{item} (7층)", 0.0))
+                        consumable_totals[item] = total_q
+
+                    low_stock_items = [i for i, q in consumable_totals.items() if q <= get_threshold(i)]
                     if low_stock_items:
                         st.markdown(
-                            "⚠️ **재고 부족 품목**  " + "".join(
-                                [f'<span class="low-stock-pill">{i} ({current_stock[i]:.2f})</span>' for i in low_stock_items]
+                            "⚠️ **재고 부족 소모품 (총수량 기준)**  " + "".join(
+                                [f'<span class="low-stock-pill">{i} ({consumable_totals[i]:.2f})</span>' for i in low_stock_items]
                             ),
                             unsafe_allow_html=True
                         )
@@ -911,14 +964,10 @@ elif menu == "📦 물품/비품 재고 관리":
 
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.markdown("##### 📄 주요 소모품 재고")
-                        df_c_stock = pd.DataFrame([{"품목": k, "현재재고": round(v, 2)} for k, v in current_stock.items() if k in CONSUMABLES])
-                        st.dataframe(
-                            df_c_stock, use_container_width=True, hide_index=True,
-                            column_config={"현재재고": st.column_config.ProgressColumn(
-                                "현재재고", min_value=0.0, max_value=max(1.0, float(df_c_stock["현재재고"].max() if not df_c_stock.empty else 1.0))
-                            )} if not df_c_stock.empty else None
-                        )
+                        st.markdown("##### 📄 주요 소모품 총 재고 (2층+6층+7층 합계)")
+                        df_c_stock = pd.DataFrame([{"소모품": k, "총 재고": round(v, 2)} for k, v in consumable_totals.items()])
+                        st.dataframe(df_c_stock, use_container_width=True, hide_index=True)
+
                     with col2:
                         st.markdown("##### 💻 비품/기기 재고")
                         df_e_stock = pd.DataFrame([{"품목": k, "현재재고(개)": round(v, 2)} for k, v in current_stock.items() if k in EQUIPMENT])
