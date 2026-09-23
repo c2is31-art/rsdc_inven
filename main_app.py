@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import re
+import uuid
 from datetime import datetime, timezone, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
@@ -8,8 +9,27 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
 
+# ==========================================
+# 📌 배포 전 확인사항 (Google Sheet 설정)
+# ==========================================
+# 1) [필수 아님, 있으면 더 안전함] "facility" 시트 A열에 "요청ID" 헤더를 새로 추가하면
+#    요청 상태변경 시 행 위치가 아닌 고유ID로 안전하게 매칭됩니다.
+#    (헤더가 없으면 자동으로 기존 방식으로 동작하므로 당장 안 해도 앱은 정상 작동합니다.)
+# 2) [선택] "config"라는 이름의 시트를 만들고 "카테고리" / "항목값" 두 컬럼을 두면,
+#    코드 수정 없이 소모품/비품/공간/보수분류 목록을 시트에서 직접 관리할 수 있습니다.
+#    예: 카테고리="소모품", 항목값="A4용지"  /  카테고리="공간_강의실", 항목값="201호"
+#    카테고리 값 목록: 소모품, 비품, 공간_강의실, 공간_자습관, 공간_화장실, 공간_기타공간,
+#                      분류_강의실, 분류_자습관, 분류_화장실, 분류_기타공간
+#    이 시트가 없으면 코드에 내장된 기본 목록이 그대로 사용됩니다.
+# 3) [보안, 강력 권장] secrets.toml 에 admin_signup_code = "원하는코드" 를 추가하세요.
+#    이 코드가 없으면 "교무팀/조교" 관리자 가입 자체가 비활성화되어, 아무나 관리자로
+#    가입할 수 없습니다. (기존 버전은 회원가입 화면에서 누구나 관리자 권한을 스스로
+#    선택할 수 있는 취약점이 있었습니다.)
+# ==========================================
+
 # 자동 번역으로 인한 글자 깨짐 방지
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
+
 
 # ==========================================
 # 🇰🇷 한국 표준시(KST) 구하기 함수
@@ -17,6 +37,22 @@ st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True
 def get_kst_now():
     kst = timezone(timedelta(hours=9))
     return datetime.now(kst).strftime("%Y-%m-%d %H:%M")
+
+
+def generate_request_id():
+    """요청 건을 고유하게 식별하기 위한 ID (시간+랜덤값)"""
+    ts = datetime.now(timezone(timedelta(hours=9))).strftime("%y%m%d%H%M%S")
+    return f"{ts}-{uuid.uuid4().hex[:5]}"
+
+
+def col_letter(n):
+    """1부터 시작하는 컬럼 번호를 A1 표기 알파벳으로 변환"""
+    letters = ""
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
 
 # ==========================================
 # 0. 페이지 기본 설정
@@ -46,13 +82,11 @@ st.markdown("""
         text-rendering: optimizeLegibility;
     }
 
-    /* 메인 컨텐츠 좌우 여백 */
     .block-container {
         padding-top: 2rem !important;
         max-width: 1200px;
     }
 
-    /* 사이드바 */
     [data-testid="stSidebar"] {
         background-color: #0f172a !important;
         border-right: 1px solid #1e293b;
@@ -78,7 +112,6 @@ st.markdown("""
         background-color: #334155 !important;
     }
 
-    /* 사이드바 사용자 카드 */
     .user-card {
         background: linear-gradient(135deg, #1e3a8a, #1d4ed8);
         border-radius: 12px;
@@ -102,13 +135,10 @@ st.markdown("""
         margin-bottom: 10px;
     }
 
-    /* 본문 라벨/텍스트 */
     label, p, span { color: #0f172a !important; letter-spacing: -0.01em; }
-
     p { line-height: 1.65; font-size: 0.98rem; }
     label { font-size: 0.92rem; font-weight: 600; }
 
-    /* 제목 계층 */
     h1, h2, h3, h4, h5, h6 {
         color: #0f172a !important;
         font-weight: 800 !important;
@@ -120,21 +150,18 @@ st.markdown("""
     h3 { font-size: 1.15rem !important; font-weight: 700 !important; }
     h4, h5 { font-weight: 700 !important; }
 
-    /* 캡션/보조 텍스트 */
     [data-testid="stCaptionContainer"], .stCaption {
         font-size: 0.85rem !important;
         color: #64748b !important;
         letter-spacing: -0.005em;
     }
 
-    /* 본문 표/숫자는 자간을 살짝 넓혀 가독성 확보 */
     .stDataFrame, .stTable, [data-testid="stMetricValue"] {
         letter-spacing: 0 !important;
     }
     [data-testid="stMetricValue"] { font-weight: 800 !important; }
     [data-testid="stMetricLabel"] { font-weight: 600 !important; color: #64748b !important; }
 
-    /* 입력 박스 */
     .stTextInput input, .stSelectbox div[data-baseweb="select"],
     .stNumberInput input, .stTextArea textarea {
         background-color: #ffffff !important;
@@ -143,7 +170,6 @@ st.markdown("""
         border-radius: 8px !important;
     }
 
-    /* 버튼 */
     .stButton>button, .stFormSubmitButton>button {
         border-radius: 8px;
         font-weight: 600;
@@ -158,7 +184,6 @@ st.markdown("""
         color: #ffffff !important;
     }
 
-    /* 탭 */
     .stTabs [data-baseweb="tab-list"] { gap: 4px; }
     .stTabs [data-baseweb="tab"] {
         background-color: #eef2ff;
@@ -171,7 +196,6 @@ st.markdown("""
     }
     .stTabs [aria-selected="true"] p { color: #ffffff !important; }
 
-    /* 카드형 섹션 */
     .section-card {
         background: #ffffff;
         border: 1px solid #e2e8f0;
@@ -181,13 +205,11 @@ st.markdown("""
         box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
 
-    /* 상태 배지 */
     .badge { display:inline-block; padding: 3px 10px; border-radius:999px; font-size:0.78rem; font-weight:700; }
     .badge-접수완료 { background:#dbeafe; color:#1e3a8a !important; }
     .badge-처리중 { background:#fef3c7; color:#92400e !important; }
     .badge-완료 { background:#dcfce7; color:#166534 !important; }
 
-    /* 로그인 브랜드 패널 */
     .brand-panel {
         background: linear-gradient(160deg, #1e3a8a, #1d4ed8 70%);
         border-radius: 18px;
@@ -210,7 +232,6 @@ st.markdown("""
         padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 0.85rem; white-space: nowrap;
     }
 
-    /* 모바일 화면 대응 */
     @media (max-width: 640px) {
         .block-container { padding-left: 1rem !important; padding-right: 1rem !important; }
         .brand-panel { padding: 24px 20px; border-radius: 14px; }
@@ -253,13 +274,92 @@ except Exception as e:
     st.error(f"⚠️ 구글 시트 및 드라이브 연동에 실패했습니다: {e}")
     st.stop()
 
-# 구글 드라이브 사진 업로드 함수
+# 선택적 "config" 시트 (없어도 앱은 정상 동작)
+try:
+    ws_config = sh.worksheet("config")
+except Exception:
+    ws_config = None
+
+# facility 시트에 "요청ID" 컬럼이 있는지 확인 (없으면 기존 방식 그대로 동작)
+try:
+    FACILITY_HEADER = ws_facility.row_values(1)
+except Exception:
+    FACILITY_HEADER = []
+FACILITY_HAS_ID = "요청ID" in FACILITY_HEADER
+
+# 관리자 가입 승인 코드 (secrets.toml 에 admin_signup_code 없으면 관리자 가입 비활성화)
+try:
+    ADMIN_SIGNUP_CODE = st.secrets.get("admin_signup_code")
+except Exception:
+    ADMIN_SIGNUP_CODE = None
+
+
+# ==========================================
+# 캐시된 데이터 읽기 (구글시트 API 쿼터 절약용, 20~60초 캐시)
+# ==========================================
+@st.cache_data(ttl=20, show_spinner=False)
+def get_facility_records():
+    return ws_facility.get_all_records()
+
+@st.cache_data(ttl=20, show_spinner=False)
+def get_inventory_records():
+    return ws_inventory.get_all_records()
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_users_records():
+    return ws_users.get_all_records()
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_config_records():
+    if ws_config is None:
+        return []
+    try:
+        return ws_config.get_all_records()
+    except Exception:
+        return []
+
+
+def find_facility_row_by_id(row_id):
+    """요청ID로 실제 시트의 행 번호를 찾는다 (없으면 None)"""
+    try:
+        cell = ws_facility.find(str(row_id))
+        return cell.row
+    except Exception:
+        return None
+
+
+# 구글 드라이브 사진 업로드 함수 (용량 제한 + 자동 리사이즈)
+MAX_PHOTO_MB = 8
+
+def photo_too_large(uploaded_file):
+    return uploaded_file is not None and uploaded_file.size > MAX_PHOTO_MB * 1024 * 1024
+
 def upload_photo_to_drive(uploaded_file):
     if uploaded_file is None:
         return ""
+    if photo_too_large(uploaded_file):
+        st.warning(f"사진 용량이 {MAX_PHOTO_MB}MB를 초과해 업로드를 건너뛰었습니다.")
+        return ""
     try:
+        img_bytes = uploaded_file.getvalue()
+        mime_type = uploaded_file.type
+
+        # 가능하면 이미지를 줄여서 업로드 (Pillow가 있을 때만, 없으면 원본 그대로 진행)
+        try:
+            from PIL import Image
+            img = Image.open(io.BytesIO(img_bytes))
+            img.thumbnail((1600, 1600))
+            buf = io.BytesIO()
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            img.save(buf, format="JPEG", quality=85, optimize=True)
+            img_bytes = buf.getvalue()
+            mime_type = "image/jpeg"
+        except Exception:
+            pass
+
         file_metadata = {'name': f"facility_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uploaded_file.name}"}
-        media = MediaIoBaseUpload(io.BytesIO(uploaded_file.getvalue()), mimetype=uploaded_file.type)
+        media = MediaIoBaseUpload(io.BytesIO(img_bytes), mimetype=mime_type)
         file = drive_service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
         drive_service.permissions().create(
             fileId=file.get('id'),
@@ -279,17 +379,47 @@ def status_badge(status):
     status = str(status).strip() or "접수완료"
     return f'<span class="badge badge-{status}">{status}</span>'
 
-CONSUMABLES = [
+
+# ==========================================
+# 물품/공간/분류 목록 — config 시트가 있으면 그 값을, 없으면 기본값을 사용
+# ==========================================
+CONSUMABLES_DEFAULT = [
     "A4용지", "A3용지", "B4용지", "미색A4용지", "미색A3용지",
     "분필(백)", "분필(청)", "분필(빨)", "분필(노)",
     "점보롤", "핸드타월", "물티슈", "각티슈", "물비누",
     "종이컵", "세모금컵", "생수", "AAA건전지", "AA건전지", "마이크 커버"
 ]
-EQUIPMENT = [
+EQUIPMENT_DEFAULT = [
     "노트북", "출결리더기", "보조배터리", "캠코더",
     "삼각대 및 플레이트", "SD카드", "빔포인터", "빔리모콘", "에어컨리모콘"
 ]
+
+SPACES_DEFAULT = {
+    "강의실": ["대형강의실", "201호", "202호", "203호", "204호", "601호", "602호", "701호", "702호", "703호", "704호"],
+    "자습관": ["3-1관", "3-2관", "3-3관", "3-4관", "3-5관", "4-1관", "4-2관", "4-3관", "4-4관", "4-5관", "5-1관", "5-2관", "5-3관", "6-1관", "6-2관", "7-1관"],
+    "화장실": ["2층 남자화장실", "2층 여자화장실", "3층 남자화장실", "3층 여자화장실", "5층 남자화장실", "5층 여자화장실", "6층 남자화장실", "6층 여자화장실", "7층 남자화장실", "7층 여자화장실"],
+    "기타공간": ["기타공간 (복도/엘리베이터/로비/사무실 등)"]
+}
+
+CATEGORY_BY_SPACE_DEFAULT = {
+    "강의실": ["빔프로젝터/음향", "냉난방/환기", "조명/전기", "책상/의자/칠판", "문/창문/열쇠", "신규 물품 구매 요청", "기타 시설"],
+    "자습관": ["자습관 책상/시디즈 의자", "스탠드/전기/콘센트", "냉난방/공기청정기", "공용 스탠딩 책상", "문/창문/소음 문제", "신규 물품 구매 요청", "기타 시설"],
+    "화장실": ["대변기 (막힘/고장/부속)", "소변기 (막힘/자동센서/누수)", "세면대/수도꼭지", "휴지걸이/비누디스펜서", "조명/환풍기", "바닥 배수구/타일", "신규 물품 구매 요청", "기타 시설"],
+    "기타공간": ["엘리베이터", "복도/계단/난간", "정수기/음료대", "자동문/출입문", "조명/전기", "신규 물품 구매 요청", "기타 시설"]
+}
+
+def _config_list(category, fallback):
+    rows = get_config_records()
+    items = [str(r.get("항목값", "")).strip() for r in rows
+             if str(r.get("카테고리", "")).strip() == category and str(r.get("항목값", "")).strip()]
+    return items if items else fallback
+
+CONSUMABLES = _config_list("소모품", CONSUMABLES_DEFAULT)
+EQUIPMENT = _config_list("비품", EQUIPMENT_DEFAULT)
 ALL_ITEMS = CONSUMABLES + EQUIPMENT
+
+SPACES = {k: _config_list(f"공간_{k}", v) for k, v in SPACES_DEFAULT.items()}
+CATEGORY_BY_SPACE = {k: _config_list(f"분류_{k}", v) for k, v in CATEGORY_BY_SPACE_DEFAULT.items()}
 
 # 품목별 재고부족 기준 (미설정 항목은 소모품 5 / 비품 2 기본값 사용)
 LOW_STOCK_THRESHOLDS = {"생수": 10, "물티슈": 5, "각티슈": 5}
@@ -299,20 +429,6 @@ def get_threshold(item):
     if item in LOW_STOCK_THRESHOLDS:
         return LOW_STOCK_THRESHOLDS[item]
     return DEFAULT_LOW_STOCK["consumable"] if item in CONSUMABLES else DEFAULT_LOW_STOCK["equipment"]
-
-SPACES = {
-    "강의실": ["대형강의실", "201호", "202호", "203호", "204호", "601호", "602호", "701호", "702호", "703호", "704호"],
-    "자습관": ["3-1관", "3-2관", "3-3관", "3-4관", "3-5관", "4-1관", "4-2관", "4-3관", "4-4관", "4-5관", "5-1관", "5-2관", "5-3관", "6-1관", "6-2관", "7-1관"],
-    "화장실": ["2층 남자화장실", "2층 여자화장실", "3층 남자화장실", "3층 여자화장실", "5층 남자화장실", "5층 여자화장실", "6층 남자화장실", "6층 여자화장실", "7층 남자화장실", "7층 여자화장실"],
-    "기타공간": ["기타공간 (복도/엘리베이터/로비/사무실 등)"]
-}
-
-CATEGORY_BY_SPACE = {
-    "강의실": ["빔프로젝터/음향", "냉난방/환기", "조명/전기", "책상/의자/칠판", "문/창문/열쇠", "신규 물품 구매 요청", "기타 시설"],
-    "자습관": ["자습관 책상/시디즈 의자", "스탠드/전기/콘센트", "냉난방/공기청정기", "공용 스탠딩 책상", "문/창문/소음 문제", "신규 물품 구매 요청", "기타 시설"],
-    "화장실": ["대변기 (막힘/고장/부속)", "소변기 (막힘/자동센서/누수)", "세면대/수도꼭지", "휴지걸이/비누디스펜서", "조명/환풍기", "바닥 배수구/타일", "신규 물품 구매 요청", "기타 시설"],
-    "기타공간": ["엘리베이터", "복도/계단/난간", "정수기/음료대", "자동문/출입문", "조명/전기", "신규 물품 구매 요청", "기타 시설"]
-}
 
 STATUS_OPTIONS = ["접수완료", "처리중", "완료"]
 
@@ -356,7 +472,7 @@ if not st.session_state["logged_in"]:
                 if not c_name or not c_phone:
                     st.error("이름과 전화번호를 모두 입력해 주세요.")
                 else:
-                    df_u = pd.DataFrame(ws_users.get_all_records())
+                    df_u = pd.DataFrame(get_users_records())
                     matched = None
                     if not df_u.empty:
                         for idx, row in df_u.iterrows():
@@ -375,25 +491,38 @@ if not st.session_state["logged_in"]:
                         st.error("이름 또는 전화번호가 일치하지 않습니다. 처음이시라면 회원가입 탭을 이용해 주세요.")
 
         with tab_signup:
-            with st.form("signup_form"):
-                st.markdown("##### 신규 회원가입")
-                signup_role = st.selectbox("구분", ["교무팀", "조교", "직원", "강사"])
-                signup_name = st.text_input("이름", key="s_name", placeholder="예: 홍길동")
-                signup_phone = st.text_input("전화번호", key="s_phone", placeholder="숫자만 입력 (- 없이)")
-                st.caption("전화번호는 로그인 시 비밀번호처럼 사용됩니다. 8자리 이상 입력해 주세요.")
-                signup_submitted = st.form_submit_button("회원가입 완료", use_container_width=True)
+            st.markdown("##### 신규 회원가입")
 
-            if signup_submitted:
+            want_admin = st.checkbox("교무팀(전체 관리자)/조교(마감 재고 실사 전용)로 가입 (승인 코드 필요)")
+            admin_code_input = ""
+            if want_admin:
+                signup_role = st.selectbox("관리자 구분", ["교무팀", "조교"])
+                st.caption("교무팀: 시설요청 상태변경 + 재고관리 전체 / 조교: 마감 재고 실사 등록만 가능")
+                admin_code_input = st.text_input("관리자 승인 코드", type="password", placeholder="시스템 담당자에게 문의")
+                if not ADMIN_SIGNUP_CODE:
+                    st.warning("⚠️ 관리자 승인 코드가 설정되어 있지 않아 관리자 가입이 현재 비활성화되어 있습니다. 시스템 담당자에게 문의해 주세요.")
+            else:
+                signup_role = st.selectbox("구분", ["직원", "강사"])
+
+            signup_name = st.text_input("이름", key="s_name", placeholder="예: 홍길동")
+            signup_phone = st.text_input("전화번호", key="s_phone", placeholder="숫자만 입력 (- 없이)")
+            st.caption("전화번호는 로그인 시 비밀번호처럼 사용됩니다. 8자리 이상 입력해 주세요.")
+
+            if st.button("회원가입 완료", use_container_width=True, key="signup_btn"):
                 c_name = signup_name.strip()
                 c_phone = clean_phone(signup_phone)
-                if c_name and len(c_phone) >= 8:
-                    now_str = get_kst_now()
-                    ws_users.append_row([c_name, f"'{c_phone}", signup_role, now_str])
-                    st.success("✅ 회원가입 완료! 로그인 탭에서 로그인해 주세요.")
+
+                if want_admin and (not ADMIN_SIGNUP_CODE or admin_code_input != ADMIN_SIGNUP_CODE):
+                    st.error("관리자 승인 코드가 올바르지 않습니다.")
                 elif not c_name:
                     st.error("이름을 입력해 주세요.")
-                else:
+                elif len(c_phone) < 8:
                     st.error("전화번호는 숫자 8자리 이상으로 입력해 주세요.")
+                else:
+                    now_str = get_kst_now()
+                    ws_users.append_row([c_name, f"'{c_phone}", signup_role, now_str])
+                    get_users_records.clear()
+                    st.success("✅ 회원가입 완료! 로그인 탭에서 로그인해 주세요.")
     st.stop()
 
 # ==========================================
@@ -414,8 +543,10 @@ if st.sidebar.button("🚪 로그아웃", use_container_width=True):
 st.sidebar.markdown("---")
 
 user_role = st.session_state["user_role"]
-is_admin = user_role in ["교무팀", "조교"]
-menu_options = ["📦 물품/비품 재고 관리", "🛠️ 시설 보수 및 물품 구매 요청"] if is_admin else ["🛠️ 시설 보수 및 물품 구매 요청"]
+is_full_admin = (user_role == "교무팀")          # 시설요청 상태변경 + 재고관리 전체
+is_silsa_staff = (user_role == "조교")           # 마감 재고 실사만 가능
+can_access_inventory = is_full_admin or is_silsa_staff
+menu_options = ["📦 물품/비품 재고 관리", "🛠️ 시설 보수 및 물품 구매 요청"] if can_access_inventory else ["🛠️ 시설 보수 및 물품 구매 요청"]
 menu = st.sidebar.radio("메뉴 이동", menu_options)
 
 # ==========================================
@@ -437,16 +568,23 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
         if req_type == "🔧 시설 보수 요청":
             cat = st.selectbox("보수 분류", [c for c in CATEGORY_BY_SPACE[space_cat] if c != "신규 물품 구매 요청"])
             details = st.text_area("상세 고장 내용", placeholder="예: 에어컨에서 이상한 소음이 나고 냉방이 잘 안됩니다.")
-            photo_file = st.file_uploader("📷 현장 사진 첨부 (선택사항)", type=["png", "jpg", "jpeg"])
+            photo_file = st.file_uploader("📷 현장 사진 첨부 (선택사항, 8MB 이하)", type=["png", "jpg", "jpeg"])
             if photo_file is not None:
                 st.image(photo_file, caption="첨부 미리보기", width=240)
+                if photo_too_large(photo_file):
+                    st.error(f"사진 용량이 {MAX_PHOTO_MB}MB를 초과합니다. 더 작은 파일로 첨부해 주세요.")
 
             if st.button("보수 요청 제출", use_container_width=True):
-                if details.strip():
+                if photo_too_large(photo_file):
+                    st.error(f"사진 용량이 {MAX_PHOTO_MB}MB를 초과합니다. 첨부 파일을 확인해 주세요.")
+                elif details.strip():
                     with st.spinner("사진 업로드 및 요청 저장 중..."):
                         photo_url = upload_photo_to_drive(photo_file)
                         now_str = get_kst_now()
-                        ws_facility.append_row([now_str, space_cat, det_space, f"[보수] {cat}", details, photo_url, "접수완료", st.session_state['user_name']])
+                        base_row = [now_str, space_cat, det_space, f"[보수] {cat}", details, photo_url, "접수완료", st.session_state['user_name']]
+                        row = ([generate_request_id()] + base_row) if FACILITY_HAS_ID else base_row
+                        ws_facility.append_row(row)
+                        get_facility_records.clear()
                     st.success("✅ 요청이 정상적으로 등록되었습니다. '현황 확인' 탭에서 진행 상태를 확인할 수 있어요.")
                     st.balloons()
                 else:
@@ -455,17 +593,24 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
             item_n = st.text_input("구매 물품명", placeholder="예: 무선 마우스")
             item_q = st.number_input("수량", min_value=1, value=1)
             item_r = st.text_area("구매 사유", placeholder="예: 기존 마우스 고장으로 교체 필요")
-            photo_file = st.file_uploader("📷 참고 사진/참고자료 첨부 (선택사항)", type=["png", "jpg", "jpeg"])
+            photo_file = st.file_uploader("📷 참고 사진/참고자료 첨부 (선택사항, 8MB 이하)", type=["png", "jpg", "jpeg"])
             if photo_file is not None:
                 st.image(photo_file, caption="첨부 미리보기", width=240)
+                if photo_too_large(photo_file):
+                    st.error(f"사진 용량이 {MAX_PHOTO_MB}MB를 초과합니다. 더 작은 파일로 첨부해 주세요.")
 
             if st.button("구매 요청 제출", use_container_width=True):
-                if item_n.strip() and item_r.strip():
+                if photo_too_large(photo_file):
+                    st.error(f"사진 용량이 {MAX_PHOTO_MB}MB를 초과합니다. 첨부 파일을 확인해 주세요.")
+                elif item_n.strip() and item_r.strip():
                     with st.spinner("요청 저장 중..."):
                         photo_url = upload_photo_to_drive(photo_file)
                         now_str = get_kst_now()
                         full_d = f"[구매물품] {item_n} ({item_q}개)\n[사유] {item_r}"
-                        ws_facility.append_row([now_str, space_cat, det_space, "[구매요청] 물품구매", full_d, photo_url, "접수완료", st.session_state['user_name']])
+                        base_row = [now_str, space_cat, det_space, "[구매요청] 물품구매", full_d, photo_url, "접수완료", st.session_state['user_name']]
+                        row = ([generate_request_id()] + base_row) if FACILITY_HAS_ID else base_row
+                        ws_facility.append_row(row)
+                        get_facility_records.clear()
                     st.success("✅ 구매 요청이 정상적으로 등록되었습니다.")
                     st.balloons()
                 else:
@@ -473,7 +618,7 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
         st.markdown('</div>', unsafe_allow_html=True)
 
     with tab2:
-        df_f = pd.DataFrame(ws_facility.get_all_records())
+        df_f = pd.DataFrame(get_facility_records())
 
         if df_f.empty:
             st.info("등록된 요청이 없습니다.")
@@ -486,23 +631,33 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
             with f3:
                 keyword = st.text_input("🔍 내용 검색", placeholder="상세내용, 작성자 등으로 검색")
 
+            show_mine = st.checkbox("🙋 내가 작성한 요청만 보기", value=(not is_full_admin))
+
             df_view = df_f.copy()
             if space_filter != "전체" and "공간구분" in df_view.columns:
                 df_view = df_view[df_view["공간구분"] == space_filter]
             if status_filter != "전체" and "상태" in df_view.columns:
                 df_view = df_view[df_view["상태"] == status_filter]
+            if show_mine and "작성자" in df_view.columns:
+                df_view = df_view[df_view["작성자"] == st.session_state["user_name"]]
             if keyword:
                 mask = df_view.astype(str).apply(lambda r: r.str.contains(keyword, case=False, na=False)).any(axis=1)
                 df_view = df_view[mask]
+
+            df_view = df_view.iloc[::-1]  # 최신 등록 건이 위로 오도록 정렬
 
             m1, m2, m3 = st.columns(3)
             m1.metric("전체 요청", len(df_f))
             m2.metric("접수완료", int((df_f.get("상태") == "접수완료").sum()) if "상태" in df_f.columns else 0)
             m3.metric("완료", int((df_f.get("상태") == "완료").sum()) if "상태" in df_f.columns else 0)
 
+            if "공간구분" in df_f.columns:
+                with st.expander("📊 공간별 요청 통계 보기"):
+                    st.bar_chart(df_f["공간구분"].value_counts())
+
             st.caption(f"검색 결과: {len(df_view)}건")
 
-            if is_admin and "상태" in df_view.columns:
+            if is_full_admin and "상태" in df_view.columns:
                 st.caption("💡 관리자는 아래 표에서 '상태' 칸을 직접 눌러 변경할 수 있습니다. 변경 후 저장 버튼을 눌러주세요.")
                 edited = st.data_editor(
                     df_view,
@@ -515,25 +670,33 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
                     key="facility_editor"
                 )
                 if st.button("💾 상태 변경 저장", use_container_width=True):
+                    updates = []
                     changes = 0
-                    with st.spinner("변경 사항 저장 중..."):
-                        for i in edited.index:
-                            new_status = edited.loc[i, "상태"]
-                            old_status = df_view.loc[i, "상태"]
-                            if new_status != old_status:
-                                sheet_row = i + 2  # 헤더(1행) + 0-index 보정
-                                col_num = list(df_f.columns).index("상태") + 1
-                                ws_facility.update_cell(sheet_row, col_num, new_status)
-                                changes += 1
-                    if changes:
+                    status_col_num = list(df_f.columns).index("상태") + 1
+                    status_col_letter = col_letter(status_col_num)
+                    for i in edited.index:
+                        new_status = edited.loc[i, "상태"]
+                        old_status = df_view.loc[i, "상태"]
+                        if new_status != old_status:
+                            row_num = None
+                            if "요청ID" in edited.columns and edited.loc[i, "요청ID"]:
+                                row_num = find_facility_row_by_id(edited.loc[i, "요청ID"])
+                            if row_num is None:
+                                row_num = i + 2  # 헤더(1행) + 0-index 보정 (구버전 호환)
+                            updates.append({"range": f"{status_col_letter}{row_num}", "values": [[new_status]]})
+                            changes += 1
+
+                    if updates:
+                        with st.spinner("변경 사항 저장 중..."):
+                            ws_facility.batch_update(updates)
+                        get_facility_records.clear()
                         st.success(f"✅ {changes}건의 상태가 업데이트되었습니다.")
                         st.rerun()
                     else:
                         st.info("변경된 내용이 없습니다.")
             else:
-                # 상태에 배지를 입혀서 보여주기
                 if "상태" in df_view.columns:
-                    df_show = df_view.copy()
+                    df_show = df_view.drop(columns=["요청ID"], errors="ignore").copy()
                     df_show["상태"] = df_show["상태"].apply(status_badge)
                     st.markdown(
                         f'<div class="scroll-table">{df_show.to_html(escape=False, index=False)}</div>',
@@ -554,15 +717,34 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
 # ==========================================
 elif menu == "📦 물품/비품 재고 관리":
     st.title("📦 재고 관리 System")
-    tab1, tab2, tab3 = st.tabs(["📝 마감 재고 실사", "📥 입고 및 출고(사용) 등록", "📊 재고 현황 & 이력"])
+
+    if is_full_admin:
+        tab1, tab2, tab3 = st.tabs(["📝 마감 재고 실사", "📥 입고 및 출고(사용) 등록", "📊 재고 현황 & 이력"])
+    else:
+        st.info("🔒 조교 계정은 '마감 재고 실사' 등록만 진행할 수 있습니다. 입고/출고 등록과 재고 현황 조회는 교무팀 계정으로 이용해 주세요.")
+        tab1 = st.container()
 
     def get_safe_inventory_df():
         try:
-            records = ws_inventory.get_all_records()
+            records = get_inventory_records()
             return pd.DataFrame(records)
         except Exception:
             all_cols = ["일시", "구분", "작성자"] + ALL_ITEMS + ["비고"]
             return pd.DataFrame(columns=all_cols)
+
+    def get_last_silsa_values():
+        df = get_safe_inventory_df()
+        if df.empty or "구분" not in df.columns:
+            return {}
+        df_silsa = df[df["구분"] == "실사"]
+        if df_silsa.empty:
+            return {}
+        last_row = df_silsa.iloc[-1]
+        result = {}
+        for item in ALL_ITEMS:
+            if item in df_silsa.columns:
+                result[item] = int(pd.to_numeric(last_row.get(item, 0), errors="coerce") or 0)
+        return result
 
     # 탭 1: 마감 재고 실사 (표 형태로 한 번에 입력)
     with tab1:
@@ -572,10 +754,14 @@ elif menu == "📦 물품/비품 재고 관리":
         now_str = get_kst_now()
         st.write(f"등록일시: **{now_str}** | 작성자: **{st.session_state['user_name']}**")
 
+        last_vals = get_last_silsa_values()
+        if last_vals:
+            st.caption("💡 직전 마감 실사값이 기본으로 채워져 있습니다. 실제 수량과 다르면 표에서 직접 수정해 주세요.")
+
         base_df = pd.DataFrame({
             "품목": ALL_ITEMS,
             "구분": ["소모품(BOX)" if i in CONSUMABLES else "비품(개)" for i in ALL_ITEMS],
-            "실사수량": [0] * len(ALL_ITEMS)
+            "실사수량": [last_vals.get(i, 0) for i in ALL_ITEMS]
         })
 
         edited_inv = st.data_editor(
@@ -594,113 +780,119 @@ elif menu == "📦 물품/비품 재고 관리":
             row = [now_str, "실사", st.session_state['user_name']] + [int(all_v[i]) for i in ALL_ITEMS] + ["정기 마감 실사"]
             with st.spinner("저장 중..."):
                 ws_inventory.append_row(row)
+                get_inventory_records.clear()
             st.success("✅ 마감 실사 데이터가 저장되었습니다.")
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # 탭 2: 입고 및 출고 등록
-    with tab2:
-        st.markdown('<div class="section-card">', unsafe_allow_html=True)
-        st.subheader("📥 입고 / 📤 출고(사용) 등록")
-        st.caption("※ 수량 변동 내역(입고/사용)만 별도로 등록합니다.")
+    # 탭 2: 입고 및 출고 등록 (교무팀 전용)
+    if is_full_admin:
+        with tab2:
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.subheader("📥 입고 / 📤 출고(사용) 등록")
+            st.caption("※ 수량 변동 내역(입고/사용)만 별도로 등록합니다.")
 
-        inout_type = st.radio("작업 구분", ["📥 입고 (수량 추가)", "📤 출고 (사용/차감)"], horizontal=True)
-        col1, col2 = st.columns(2)
-        with col1:
-            target_item = st.selectbox("물품 선택", ALL_ITEMS)
-        with col2:
-            qty = st.number_input("수량", min_value=1, value=1)
-        memo = st.text_input("비고/메모 (예: OO문구 구매분, 3층 자습관 교체용 등)", placeholder="사유 입력")
+            inout_type = st.radio("작업 구분", ["📥 입고 (수량 추가)", "📤 출고 (사용/차감)"], horizontal=True)
+            col1, col2 = st.columns(2)
+            with col1:
+                target_item = st.selectbox("물품 선택", ALL_ITEMS)
+            with col2:
+                qty = st.number_input("수량", min_value=1, value=1)
+            memo = st.text_input("비고/메모 (예: OO문구 구매분, 3층 자습관 교체용 등)", placeholder="사유 입력")
 
-        if st.button("내역 등록하기", use_container_width=True):
-            now_str = get_kst_now()
-            is_in = "입고" in inout_type
-            action_label = "입고" if is_in else "출고"
-            record_qty = qty if is_in else -qty
+            if st.button("내역 등록하기", use_container_width=True):
+                now_str = get_kst_now()
+                is_in = "입고" in inout_type
+                action_label = "입고" if is_in else "출고"
+                record_qty = qty if is_in else -qty
 
-            row_data = [now_str, action_label, st.session_state['user_name']]
-            for item in ALL_ITEMS:
-                row_data.append(record_qty if item == target_item else 0)
-            row_data.append(memo)
-
-            with st.spinner("등록 중..."):
-                ws_inventory.append_row(row_data)
-            st.success(f"🎉 [{target_item}] {qty}개 {action_label} 등록 완료! (비고: {memo or '없음'})")
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # 탭 3: 현황 및 누적 계산
-    with tab3:
-        df_i = get_safe_inventory_df()
-
-        if df_i.empty:
-            st.info("등록된 재고 데이터가 없습니다.")
-        else:
-            st.subheader("📊 현재 계산 재고")
-            df_silsa = df_i[df_i["구분"] == "실사"]
-
-            if not df_silsa.empty:
-                last_silsa_idx = df_silsa.index[-1]
-                last_silsa_date = df_i.loc[last_silsa_idx, "일시"]
-                st.caption(f"💡 최근 실사일({last_silsa_date}) 이후의 입출고 내역을 자동으로 합산한 현재 재고입니다.")
-
-                df_calc = df_i.loc[last_silsa_idx:].copy()
-
-                current_stock = {}
+                row_data = [now_str, action_label, st.session_state['user_name']]
                 for item in ALL_ITEMS:
-                    if item in df_calc.columns:
-                        current_stock[item] = pd.to_numeric(df_calc[item], errors='coerce').fillna(0).sum()
-                    else:
-                        current_stock[item] = 0
+                    row_data.append(record_qty if item == target_item else 0)
+                row_data.append(memo)
 
-                low_stock_items = [i for i in ALL_ITEMS if current_stock[i] <= get_threshold(i)]
-                if low_stock_items:
-                    st.markdown(
-                        "⚠️ **재고 부족 품목**  " + "".join(
-                            [f'<span class="low-stock-pill">{i} ({int(current_stock[i])})</span>' for i in low_stock_items]
-                        ),
-                        unsafe_allow_html=True
-                    )
-                else:
-                    st.success("✅ 현재 재고 부족 품목이 없습니다.")
+                with st.spinner("등록 중..."):
+                    ws_inventory.append_row(row_data)
+                    get_inventory_records.clear()
+                st.success(f"🎉 [{target_item}] {qty}개 {action_label} 등록 완료! (비고: {memo or '없음'})")
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
 
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("##### 📄 주요 소모품 재고")
-                    df_c_stock = pd.DataFrame([{"품목": k, "현재재고(BOX)": int(v)} for k, v in current_stock.items() if k in CONSUMABLES])
-                    st.dataframe(
-                        df_c_stock, use_container_width=True, hide_index=True,
-                        column_config={"현재재고(BOX)": st.column_config.ProgressColumn(
-                            "현재재고(BOX)", min_value=0, max_value=max(1, int(df_c_stock["현재재고(BOX)"].max()))
-                        )} if not df_c_stock.empty else None
-                    )
-                with col2:
-                    st.markdown("##### 💻 비품/기기 재고")
-                    df_e_stock = pd.DataFrame([{"품목": k, "현재재고(개)": int(v)} for k, v in current_stock.items() if k in EQUIPMENT])
-                    st.dataframe(df_e_stock, use_container_width=True, hide_index=True)
+    # 탭 3: 현황 및 누적 계산 (교무팀 전용)
+    if is_full_admin:
+        with tab3:
+            df_i = get_safe_inventory_df()
+
+            if df_i.empty:
+                st.info("등록된 재고 데이터가 없습니다.")
             else:
-                st.warning("⚠️ 등록된 '마감 실사' 데이터가 없습니다. 먼저 1번째 탭에서 마감 실사를 진행해 주세요.")
+                st.subheader("📊 현재 계산 재고")
+                df_silsa = df_i[df_i["구분"] == "실사"]
 
-            st.markdown("---")
-            st.subheader("📋 전체 이력 히스토리 (실사/입고/출고)")
+                if not df_silsa.empty:
+                    last_silsa_idx = df_silsa.index[-1]
+                    last_silsa_date = df_i.loc[last_silsa_idx, "일시"]
+                    st.caption(f"💡 최근 실사일({last_silsa_date}) 이후의 입출고 내역을 자동으로 합산한 현재 재고입니다.")
 
-            h1, h2 = st.columns([1, 2])
-            with h1:
-                type_filter = st.selectbox("구분 필터", ["전체", "실사", "입고", "출고"])
-            with h2:
-                item_keyword = st.text_input("🔍 품목/작성자/비고 검색")
+                    df_calc = df_i.loc[last_silsa_idx:].copy()
 
-            df_hist = df_i.copy()
-            if type_filter != "전체":
-                df_hist = df_hist[df_hist["구분"] == type_filter]
-            if item_keyword:
-                mask = df_hist.astype(str).apply(lambda r: r.str.contains(item_keyword, case=False, na=False)).any(axis=1)
-                df_hist = df_hist[mask]
+                    current_stock = {}
+                    for item in ALL_ITEMS:
+                        if item in df_calc.columns:
+                            current_stock[item] = pd.to_numeric(df_calc[item], errors='coerce').fillna(0).sum()
+                        else:
+                            current_stock[item] = 0
 
-            st.dataframe(df_hist, use_container_width=True, hide_index=True)
-            st.download_button(
-                "⬇️ 이력 CSV 다운로드",
-                df_hist.to_csv(index=False).encode("utf-8-sig"),
-                file_name="재고_이력.csv",
-                mime="text/csv"
-            )
+                    low_stock_items = [i for i in ALL_ITEMS if current_stock[i] <= get_threshold(i)]
+                    if low_stock_items:
+                        st.markdown(
+                            "⚠️ **재고 부족 품목**  " + "".join(
+                                [f'<span class="low-stock-pill">{i} ({int(current_stock[i])})</span>' for i in low_stock_items]
+                            ),
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        st.success("✅ 현재 재고 부족 품목이 없습니다.")
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("##### 📄 주요 소모품 재고")
+                        df_c_stock = pd.DataFrame([{"품목": k, "현재재고(BOX)": int(v)} for k, v in current_stock.items() if k in CONSUMABLES])
+                        st.dataframe(
+                            df_c_stock, use_container_width=True, hide_index=True,
+                            column_config={"현재재고(BOX)": st.column_config.ProgressColumn(
+                                "현재재고(BOX)", min_value=0, max_value=max(1, int(df_c_stock["현재재고(BOX)"].max()))
+                            )} if not df_c_stock.empty else None
+                        )
+                    with col2:
+                        st.markdown("##### 💻 비품/기기 재고")
+                        df_e_stock = pd.DataFrame([{"품목": k, "현재재고(개)": int(v)} for k, v in current_stock.items() if k in EQUIPMENT])
+                        st.dataframe(df_e_stock, use_container_width=True, hide_index=True)
+                else:
+                    st.warning("⚠️ 등록된 '마감 실사' 데이터가 없습니다. 먼저 1번째 탭에서 마감 실사를 진행해 주세요.")
+
+                st.markdown("---")
+                st.subheader("📋 전체 이력 히스토리 (실사/입고/출고)")
+
+                h1, h2 = st.columns([1, 2])
+                with h1:
+                    type_filter = st.selectbox("구분 필터", ["전체", "실사", "입고", "출고"])
+                with h2:
+                    item_keyword = st.text_input("🔍 품목/작성자/비고 검색")
+
+                df_hist = df_i.copy()
+                if type_filter != "전체":
+                    df_hist = df_hist[df_hist["구분"] == type_filter]
+                if item_keyword:
+                    mask = df_hist.astype(str).apply(lambda r: r.str.contains(item_keyword, case=False, na=False)).any(axis=1)
+                    df_hist = df_hist[mask]
+
+                df_hist = df_hist.iloc[::-1]  # 최신 이력이 위로 오도록 정렬
+
+                st.dataframe(df_hist, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "⬇️ 이력 CSV 다운로드",
+                    df_hist.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="재고_이력.csv",
+                    mime="text/csv"
+                )
