@@ -65,7 +65,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# Custom CSS (디자인 개선)
+# Custom CSS (디자인 및 시각성 개선)
 # ==========================================
 st.markdown("""
     <style>
@@ -87,6 +87,7 @@ st.markdown("""
         max-width: 1200px;
     }
 
+    /* 사이드바 스타일 */
     [data-testid="stSidebar"] {
         background-color: #0f172a !important;
         border-right: 1px solid #1e293b;
@@ -96,20 +97,42 @@ st.markdown("""
     }
     [data-testid="stSidebar"] hr { border-color: #334155 !important; }
 
-    [data-testid="stRadio"] label p {
+    /* 사이드바 전용 라디오 버튼 스타일 */
+    [data-testid="stSidebar"] [data-testid="stRadio"] label p {
         color: #e2e8f0 !important;
         font-weight: 600 !important;
         font-size: 0.98rem !important;
     }
-    [data-testid="stRadio"] div[role="radiogroup"] > label {
+    [data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] > label {
         padding: 10px 12px;
         border-radius: 10px;
         margin-bottom: 6px;
         background-color: #1e293b;
         transition: background-color 0.15s ease;
     }
-    [data-testid="stRadio"] div[role="radiogroup"] > label:hover {
+    [data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] > label:hover {
         background-color: #334155 !important;
+    }
+
+    /* 🔥 [수정 포인트] 본문 메인 영역 라디오 버튼 (요청 유형 글자 시각성 강화) */
+    .stMainBlockContainer [data-testid="stRadio"] label p,
+    .stMainBlockContainer [data-testid="stRadio"] div[role="radiogroup"] label p {
+        color: #0f172a !important;
+        font-weight: 700 !important;
+        font-size: 1.02rem !important;
+    }
+    .stMainBlockContainer [data-testid="stRadio"] div[role="radiogroup"] > label {
+        background-color: #ffffff !important;
+        border: 1.5px solid #cbd5e1 !important;
+        padding: 10px 18px !important;
+        border-radius: 10px !important;
+        margin-right: 8px !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        transition: all 0.2s ease;
+    }
+    .stMainBlockContainer [data-testid="stRadio"] div[role="radiogroup"] > label:hover {
+        background-color: #eff6ff !important;
+        border-color: #1d4ed8 !important;
     }
 
     .user-card {
