@@ -801,65 +801,53 @@ elif menu == "📦 물품/비품 재고 관리":
 
         last_vals = get_last_silsa_values()
 
-        # 소모품 입력 데이터프레임 생성
+        # 소모품 입력 데이터프레임 생성 (None/빈값은 0.0으로 안전하게 처리)
         consumable_rows = []
         for item in CONSUMABLES:
-            v2 = float(last_vals.get(f"{item} (2층)", 0.0))
-            v6 = float(last_vals.get(f"{item} (6층)", 0.0))
-            v7 = float(last_vals.get(f"{item} (7층)", 0.0))
+            def safe_float(val):
+                try:
+                    if pd.isna(val) or val is None or str(val).strip() == "":
+                        return 0.0
+                    return float(val)
+                except (ValueError, TypeError):
+                    return 0.0
+
+            v2 = safe_float(last_vals.get(f"{item} (2층)"))
+            v6 = safe_float(last_vals.get(f"{item} (6층)"))
+            v7 = safe_float(last_vals.get(f"{item} (7층)"))
+            
             consumable_rows.append({
                 "소모품": item,
                 "2층 수량": v2,
                 "6층 수량": v6,
                 "7층 수량": v7,
-                "총 수량": v2 + v6 + v7
+                "총 수량 (자동합산)": v2 + v6 + v7
             })
 
         df_c_input = pd.DataFrame(consumable_rows)
 
         st.markdown("##### 🧻 소모품 (층별 수량 입력)")
+        
+        # 1. 먼저 data_editor로 사용자 입력 받기
         edited_c = st.data_editor(
             df_c_input,
             use_container_width=True,
             hide_index=True,
-            disabled=["소모품", "총 수량"],
+            disabled=["소모품", "총 수량 (자동합산)"],
             column_config={
-                "2층 수량": st.column_config.NumberColumn("2층 수량", min_value=0.0, step=0.1, format="%.2f"),
-                "6층 수량": st.column_config.NumberColumn("6층 수량", min_value=0.0, step=0.1, format="%.2f"),
-                "7층 수량": st.column_config.NumberColumn("7층 수량", min_value=0.0, step=0.1, format="%.2f"),
-                "총 수량": st.column_config.NumberColumn("총 수량 (자동합산)", format="%.2f")
+                "2층 수량": st.column_config.NumberColumn("2층 수량", min_value=0.0, step=1.0, default=0.0, format="%.0f"),
+                "6층 수량": st.column_config.NumberColumn("6층 수량", min_value=0.0, step=1.0, default=0.0, format="%.0f"),
+                "7층 수량": st.column_config.NumberColumn("7층 수량", min_value=0.0, step=1.0, default=0.0, format="%.0f"),
+                "총 수량 (자동합산)": st.column_config.NumberColumn("총 수량 (자동합산)", format="%.0f")
             },
             key="c_silsa_editor"
         )
 
-        # 총 수량 동적 자동 계산 (화면 표시용)
-        edited_c["총 수량"] = edited_c["2층 수량"] + edited_c["6층 수량"] + edited_c["7층 수량"]
-
-        st.markdown("---")
-        st.markdown("##### 💻 비품/기기 (수량 입력)")
-
-        equipment_rows = []
-        for item in EQUIPMENT:
-            equipment_rows.append({
-                "비품명": item,
-                "실사수량": float(last_vals.get(item, 0.0))
-            })
-
-        df_e_input = pd.DataFrame(equipment_rows)
-
-        edited_e = st.data_editor(
-            df_e_input,
-            use_container_width=True,
-            hide_index=True,
-            disabled=["비품명"],
-            column_config={
-                "실사수량": st.column_config.NumberColumn("실사수량", min_value=0.0, step=0.1, format="%.2f")
-            },
-            key="e_silsa_editor"
-        )
-
-        if st.button("마감 실사 저장", use_container_width=True):
-            sheet_values = {}
+        # 2. 입력받은 값으로 총 수량 실시간 재계산 (None 처리 포함)
+        edited_c["2층 수량"] = edited_c["2층 수량"].fillna(0)
+        edited_c["6층 수량"] = edited_c["6층 수량"].fillna(0)
+        edited_c["7층 수량"] = edited_c["7층 수량"].fillna(0)
+        edited_c["총 수량 (자동합산)"] = edited_c["2층 수량"] + edited_c["6층 수량"] + edited_c["7층 수량"]
 
             # 소모품 각 층 및 총수량 매핑
             for _, r in edited_c.iterrows():
