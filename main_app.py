@@ -21,10 +21,6 @@ import io
 #    카테고리 값 목록: 소모품, 비품, 공간_강의실, 공간_자습관, 공간_화장실, 공간_기타공간,
 #                      분류_강의실, 분류_자습관, 분류_화장실, 분류_기타공간
 #    이 시트가 없으면 코드에 내장된 기본 목록이 그대로 사용됩니다.
-# 3) [보안, 강력 권장] secrets.toml 에 admin_signup_code = "원하는코드" 를 추가하세요.
-#    이 코드가 없으면 "교무팀/조교" 관리자 가입 자체가 비활성화되어, 아무나 관리자로
-#    가입할 수 없습니다. (기존 버전은 회원가입 화면에서 누구나 관리자 권한을 스스로
-#    선택할 수 있는 취약점이 있었습니다.)
 # ==========================================
 
 # 자동 번역으로 인한 글자 깨짐 방지
@@ -114,7 +110,7 @@ st.markdown("""
         background-color: #334155 !important;
     }
 
-    /* 🔥 [수정 포인트] 본문 메인 영역 라디오 버튼 (요청 유형 글자 시각성 강화) */
+    /* 🔥 본문 메인 영역 라디오 버튼 */
     .stMainBlockContainer [data-testid="stRadio"] label p,
     .stMainBlockContainer [data-testid="stRadio"] div[role="radiogroup"] label p {
         color: #0f172a !important;
@@ -309,12 +305,6 @@ try:
 except Exception:
     FACILITY_HEADER = []
 FACILITY_HAS_ID = "요청ID" in FACILITY_HEADER
-
-# 관리자 가입 승인 코드 (secrets.toml 에 admin_signup_code 없으면 관리자 가입 비활성화)
-try:
-    ADMIN_SIGNUP_CODE = st.secrets.get("admin_signup_code")
-except Exception:
-    ADMIN_SIGNUP_CODE = None
 
 
 # ==========================================
@@ -516,16 +506,13 @@ if not st.session_state["logged_in"]:
         with tab_signup:
             st.markdown("##### 신규 회원가입")
 
-            want_admin = st.checkbox("교무팀(전체 관리자)/조교(마감 재고 실사 전용)로 가입 (승인 코드 필요)")
-            admin_code_input = ""
-            if want_admin:
-                signup_role = st.selectbox("관리자 구분", ["교무팀", "조교"])
-                st.caption("교무팀: 시설요청 상태변경 + 재고관리 전체 / 조교: 마감 재고 실사 등록만 가능")
-                admin_code_input = st.text_input("관리자 승인 코드", type="password", placeholder="시스템 담당자에게 문의")
-                if not ADMIN_SIGNUP_CODE:
-                    st.warning("⚠️ 관리자 승인 코드가 설정되어 있지 않아 관리자 가입이 현재 비활성화되어 있습니다. 시스템 담당자에게 문의해 주세요.")
-            else:
-                signup_role = st.selectbox("구분", ["직원", "강사"])
+            # 승인 코드 입력 절차 제거
+            signup_role = st.selectbox("가입 구분", ["직원", "강사", "교무팀", "조교"])
+            
+            if signup_role == "교무팀":
+                st.caption("💡 교무팀: 시설요청 상태변경 및 재고 관리 전체 권한이 부여됩니다.")
+            elif signup_role == "조교":
+                st.caption("💡 조교: 마감 재고 실사 등록 전용 권한이 부여됩니다.")
 
             signup_name = st.text_input("이름", key="s_name", placeholder="예: 홍길동")
             signup_phone = st.text_input("전화번호", key="s_phone", placeholder="숫자만 입력 (- 없이)")
@@ -535,9 +522,7 @@ if not st.session_state["logged_in"]:
                 c_name = signup_name.strip()
                 c_phone = clean_phone(signup_phone)
 
-                if want_admin and (not ADMIN_SIGNUP_CODE or admin_code_input != ADMIN_SIGNUP_CODE):
-                    st.error("관리자 승인 코드가 올바르지 않습니다.")
-                elif not c_name:
+                if not c_name:
                     st.error("이름을 입력해 주세요.")
                 elif len(c_phone) < 8:
                     st.error("전화번호는 숫자 8자리 이상으로 입력해 주세요.")
