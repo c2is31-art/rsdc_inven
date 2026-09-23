@@ -14,13 +14,8 @@ import io
 # ==========================================
 # 1) [필수 아님, 있으면 더 안전함] "facility" 시트 A열에 "요청ID" 헤더를 새로 추가하면
 #    요청 상태변경 시 행 위치가 아닌 고유ID로 안전하게 매칭됩니다.
-#    (헤더가 없으면 자동으로 기존 방식으로 동작하므로 당장 안 해도 앱은 정상 작동합니다.)
 # 2) [선택] "config"라는 이름의 시트를 만들고 "카테고리" / "항목값" 두 컬럼을 두면,
 #    코드 수정 없이 소모품/비품/공간/보수분류 목록을 시트에서 직접 관리할 수 있습니다.
-#    예: 카테고리="소모품", 항목값="A4용지"  /  카테고리="공간_강의실", 항목값="201호"
-#    카테고리 값 목록: 소모품, 비품, 공간_강의실, 공간_자습관, 공간_화장실, 공간_기타공간,
-#                      분류_강의실, 분류_자습관, 분류_화장실, 분류_기타공간
-#    이 시트가 없으면 코드에 내장된 기본 목록이 그대로 사용됩니다.
 # ==========================================
 
 # 자동 번역으로 인한 글자 깨짐 방지
@@ -357,7 +352,6 @@ def upload_photo_to_drive(uploaded_file):
         img_bytes = uploaded_file.getvalue()
         mime_type = uploaded_file.type
 
-        # 가능하면 이미지를 줄여서 업로드 (Pillow가 있을 때만, 없으면 원본 그대로 진행)
         try:
             from PIL import Image
             img = Image.open(io.BytesIO(img_bytes))
@@ -396,12 +390,17 @@ def status_badge(status):
 # ==========================================
 # 물품/공간/분류 목록 — config 시트가 있으면 그 값을, 없으면 기본값을 사용
 # ==========================================
-CONSUMABLES_DEFAULT = [
+CONSUMABLES_BASE = [
     "A4용지", "A3용지", "B4용지", "미색A4용지", "미색A3용지",
     "분필(백)", "분필(청)", "분필(빨)", "분필(노)",
     "점보롤", "핸드타월", "물티슈", "각티슈", "물비누",
     "종이컵", "세모금컵", "생수", "AAA건전지", "AA건전지", "마이크 커버"
 ]
+
+FLOORS = ["2층", "6층", "7층"]
+
+CONSUMABLES_DEFAULT = [f"{item} ({floor})" for item in CONSUMABLES_BASE for floor in FLOORS]
+
 EQUIPMENT_DEFAULT = [
     "노트북", "출결리더기", "보조배터리", "캠코더",
     "삼각대 및 플레이트", "SD카드", "빔포인터", "빔리모콘", "에어컨리모콘"
@@ -439,8 +438,9 @@ LOW_STOCK_THRESHOLDS = {"생수": 10, "물티슈": 5, "각티슈": 5}
 DEFAULT_LOW_STOCK = {"consumable": 5, "equipment": 2}
 
 def get_threshold(item):
-    if item in LOW_STOCK_THRESHOLDS:
-        return LOW_STOCK_THRESHOLDS[item]
+    base_item = item.split(" (")[0]
+    if base_item in LOW_STOCK_THRESHOLDS:
+        return LOW_STOCK_THRESHOLDS[base_item]
     return DEFAULT_LOW_STOCK["consumable"] if item in CONSUMABLES else DEFAULT_LOW_STOCK["equipment"]
 
 STATUS_OPTIONS = ["접수완료", "처리중", "완료"]
@@ -506,7 +506,6 @@ if not st.session_state["logged_in"]:
         with tab_signup:
             st.markdown("##### 신규 회원가입")
 
-            # 승인 코드 입력 절차 제거
             signup_role = st.selectbox("가입 구분", ["직원", "강사", "교무팀", "조교"])
             
             if signup_role == "교무팀":
@@ -690,7 +689,7 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
                             if "요청ID" in edited.columns and edited.loc[i, "요청ID"]:
                                 row_num = find_facility_row_by_id(edited.loc[i, "요청ID"])
                             if row_num is None:
-                                row_num = i + 2  # 헤더(1행) + 0-index 보정 (구버전 호환)
+                                row_num = i + 2
                             updates.append({"range": f"{status_col_letter}{row_num}", "values": [[new_status]]})
                             changes += 1
 
@@ -721,7 +720,7 @@ if menu == "🛠️ 시설 보수 및 물품 구매 요청":
             )
 
 # ==========================================
-# 4. 재고 관리 (실사/입고/출고 분리 보완판)
+# 4. 재고 관리 (실사/입고/출고 분리 보완판 - 소수점 및 층별 구분 지원)
 # ==========================================
 elif menu == "📦 물품/비품 재고 관리":
     st.title("📦 재고 관리 System")
@@ -751,14 +750,14 @@ elif menu == "📦 물품/비품 재고 관리":
         result = {}
         for item in ALL_ITEMS:
             if item in df_silsa.columns:
-                result[item] = int(pd.to_numeric(last_row.get(item, 0), errors="coerce") or 0)
+                result[item] = float(pd.to_numeric(last_row.get(item, 0.0), errors="coerce") or 0.0)
         return result
 
-    # 탭 1: 마감 재고 실사 (표 형태로 한 번에 입력)
+    # 탭 1: 마감 재고 실사 (소수점 입력 가능)
     with tab1:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
         st.subheader("📝 일일 마감 실사 재고 입력")
-        st.caption("※ 실제 창고에 남아있는 실사 수량을 입력합니다. (이후 입고/출고 계산의 기준점이 됩니다)")
+        st.caption("※ 실제 창고 및 각 층에 남아있는 실사 수량을 입력합니다. (소수점 입력 지원)")
         now_str = get_kst_now()
         st.write(f"등록일시: **{now_str}** | 작성자: **{st.session_state['user_name']}**")
 
@@ -768,8 +767,8 @@ elif menu == "📦 물품/비품 재고 관리":
 
         base_df = pd.DataFrame({
             "품목": ALL_ITEMS,
-            "구분": ["소모품(BOX)" if i in CONSUMABLES else "비품(개)" for i in ALL_ITEMS],
-            "실사수량": [last_vals.get(i, 0) for i in ALL_ITEMS]
+            "구분": ["소모품(BOX/개)" if i in CONSUMABLES else "비품(개)" for i in ALL_ITEMS],
+            "실사수량": [float(last_vals.get(i, 0.0)) for i in ALL_ITEMS]
         })
 
         edited_inv = st.data_editor(
@@ -778,14 +777,19 @@ elif menu == "📦 물품/비품 재고 관리":
             hide_index=True,
             disabled=["품목", "구분"],
             column_config={
-                "실사수량": st.column_config.NumberColumn("실사수량", min_value=0, step=1)
+                "실사수량": st.column_config.NumberColumn(
+                    "실사수량", 
+                    min_value=0.0, 
+                    step=0.1, 
+                    format="%.2f"
+                )
             },
             key="silsa_editor"
         )
 
         if st.button("마감 실사 저장", use_container_width=True):
             all_v = dict(zip(edited_inv["품목"], edited_inv["실사수량"]))
-            row = [now_str, "실사", st.session_state['user_name']] + [int(all_v[i]) for i in ALL_ITEMS] + ["정기 마감 실사"]
+            row = [now_str, "실사", st.session_state['user_name']] + [float(all_v[i]) for i in ALL_ITEMS] + ["정기 마감 실사"]
             with st.spinner("저장 중..."):
                 ws_inventory.append_row(row)
                 get_inventory_records.clear()
@@ -793,30 +797,30 @@ elif menu == "📦 물품/비품 재고 관리":
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # 탭 2: 입고 및 출고 등록 (교무팀 전용)
+    # 탭 2: 입고 및 출고 등록 (교무팀 전용, 소수점 입력 가능)
     if is_full_admin:
         with tab2:
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
             st.subheader("📥 입고 / 📤 출고(사용) 등록")
-            st.caption("※ 수량 변동 내역(입고/사용)만 별도로 등록합니다.")
+            st.caption("※ 수량 변동 내역(입고/사용)만 별도로 등록합니다. (소수점 입력 가능)")
 
             inout_type = st.radio("작업 구분", ["📥 입고 (수량 추가)", "📤 출고 (사용/차감)"], horizontal=True)
             col1, col2 = st.columns(2)
             with col1:
                 target_item = st.selectbox("물품 선택", ALL_ITEMS)
             with col2:
-                qty = st.number_input("수량", min_value=1, value=1)
-            memo = st.text_input("비고/메모 (예: OO문구 구매분, 3층 자습관 교체용 등)", placeholder="사유 입력")
+                qty = st.number_input("수량", min_value=0.01, value=1.0, step=0.1, format="%.2f")
+            memo = st.text_input("비고/메모 (예: OO문구 구매분, 2층 교체용 등)", placeholder="사유 입력")
 
             if st.button("내역 등록하기", use_container_width=True):
                 now_str = get_kst_now()
                 is_in = "입고" in inout_type
                 action_label = "입고" if is_in else "출고"
-                record_qty = qty if is_in else -qty
+                record_qty = float(qty) if is_in else -float(qty)
 
                 row_data = [now_str, action_label, st.session_state['user_name']]
                 for item in ALL_ITEMS:
-                    row_data.append(record_qty if item == target_item else 0)
+                    row_data.append(record_qty if item == target_item else 0.0)
                 row_data.append(memo)
 
                 with st.spinner("등록 중..."):
@@ -847,15 +851,15 @@ elif menu == "📦 물품/비품 재고 관리":
                     current_stock = {}
                     for item in ALL_ITEMS:
                         if item in df_calc.columns:
-                            current_stock[item] = pd.to_numeric(df_calc[item], errors='coerce').fillna(0).sum()
+                            current_stock[item] = float(pd.to_numeric(df_calc[item], errors='coerce').fillna(0.0).sum())
                         else:
-                            current_stock[item] = 0
+                            current_stock[item] = 0.0
 
                     low_stock_items = [i for i in ALL_ITEMS if current_stock[i] <= get_threshold(i)]
                     if low_stock_items:
                         st.markdown(
                             "⚠️ **재고 부족 품목**  " + "".join(
-                                [f'<span class="low-stock-pill">{i} ({int(current_stock[i])})</span>' for i in low_stock_items]
+                                [f'<span class="low-stock-pill">{i} ({current_stock[i]:.2f})</span>' for i in low_stock_items]
                             ),
                             unsafe_allow_html=True
                         )
@@ -865,16 +869,16 @@ elif menu == "📦 물품/비품 재고 관리":
                     col1, col2 = st.columns(2)
                     with col1:
                         st.markdown("##### 📄 주요 소모품 재고")
-                        df_c_stock = pd.DataFrame([{"품목": k, "현재재고(BOX)": int(v)} for k, v in current_stock.items() if k in CONSUMABLES])
+                        df_c_stock = pd.DataFrame([{"품목": k, "현재재고": round(v, 2)} for k, v in current_stock.items() if k in CONSUMABLES])
                         st.dataframe(
                             df_c_stock, use_container_width=True, hide_index=True,
-                            column_config={"현재재고(BOX)": st.column_config.ProgressColumn(
-                                "현재재고(BOX)", min_value=0, max_value=max(1, int(df_c_stock["현재재고(BOX)"].max()))
+                            column_config={"현재재고": st.column_config.ProgressColumn(
+                                "현재재고", min_value=0.0, max_value=max(1.0, float(df_c_stock["현재재고"].max() if not df_c_stock.empty else 1.0))
                             )} if not df_c_stock.empty else None
                         )
                     with col2:
                         st.markdown("##### 💻 비품/기기 재고")
-                        df_e_stock = pd.DataFrame([{"품목": k, "현재재고(개)": int(v)} for k, v in current_stock.items() if k in EQUIPMENT])
+                        df_e_stock = pd.DataFrame([{"품목": k, "현재재고(개)": round(v, 2)} for k, v in current_stock.items() if k in EQUIPMENT])
                         st.dataframe(df_e_stock, use_container_width=True, hide_index=True)
                 else:
                     st.warning("⚠️ 등록된 '마감 실사' 데이터가 없습니다. 먼저 1번째 탭에서 마감 실사를 진행해 주세요.")
