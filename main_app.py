@@ -536,7 +536,7 @@ if not st.session_state["logged_in"]:
             if signup_role == "교무팀":
                 st.caption("💡 교무팀: 시설요청 상태변경 및 재고 관리 전체 권한이 부여됩니다.")
             elif signup_role == "조교":
-                st.caption("💡 조교: 마감 재고 실사 등록 전용 권한이 부여됩니다.")
+                st.caption("💡 조교: 시설보수/구매요청 및 마감 재고 실사 등록 권한이 부여됩니다.")
 
             signup_name = st.text_input("이름", key="s_name", placeholder="예: 홍길동")
             signup_phone = st.text_input("전화번호", key="s_phone", placeholder="숫자만 입력 (- 없이)")
@@ -591,7 +591,12 @@ user_role = st.session_state["user_role"]
 is_full_admin = (user_role == "교무팀")
 is_silsa_staff = (user_role == "조교")
 can_access_inventory = is_full_admin or is_silsa_staff
-menu_options = ["📦 물품/비품 재고 관리", "🛠️ 시설 보수 및 물품 구매 요청"] if can_access_inventory else ["🛠️ 시설 보수 및 물품 구매 요청"]
+
+# 모든 사용자(조교 포함)가 시설 보수 요청 메뉴를 이용할 수 있도록 순서 배치
+menu_options = ["🛠️ 시설 보수 및 물품 구매 요청"]
+if can_access_inventory:
+    menu_options.append("📦 물품/비품 재고 관리")
+
 menu = st.sidebar.radio("메뉴 이동", menu_options)
 
 # ==========================================
@@ -766,7 +771,7 @@ elif menu == "📦 물품/비품 재고 관리":
     if is_full_admin:
         tab1, tab2, tab3 = st.tabs(["📝 마감 재고 실사", "📥 입고 및 출고(사용) 등록", "📊 재고 현황 & 이력"])
     else:
-        st.info("🔒 조교 계정은 '마감 재고 실사' 등록만 진행할 수 있습니다. 입고/출고 등록과 재고 현황 조회는 교무팀 계정으로 이용해 주세요.")
+        st.info("🔒 조교 계정은 '마감 재고 실사' 등록 권한이 부여되어 있습니다. 입고/출고 등록과 전체 재고 현황 조회의 추가 기능은 교무팀 계정에서 관리합니다.")
         tab1 = st.container()
 
     def get_safe_inventory_df():
