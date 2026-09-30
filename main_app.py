@@ -644,9 +644,8 @@ is_full_admin = (user_role == "교무팀")
 is_silsa_staff = (user_role == "조교")
 can_access_inventory = is_full_admin or is_silsa_staff
 
-menu_options = ["🛠️ 시설 보수 및 구매 요청"]
-if can_access_inventory:
-    menu_options.append("📦 물품/비품 재고 관리")
+# 물품/비품 재고 관리를 상단에 배치
+menu_options = ["📦 물품/비품 재고 관리", "🛠️ 시설 보수 및 구매 요청"] if can_access_inventory else ["🛠️ 시설 보수 및 구매 요청"]
 
 menu = st.sidebar.radio("Navigation", menu_options, label_visibility="collapsed")
 
