@@ -838,8 +838,8 @@ elif menu == "📦 물품/비품 재고 관리":
     if is_full_admin:
         tab1, tab2, tab3 = st.tabs(["📝 마감 실사 등록", "📥 입·출고 내역 등록", "📊 재고 대시보드"])
     else:
-        st.info("🔒 **조교 계정**은 '마감 재고 실사'만 등록 가능합니다. 입/출고 및 재고 현황 조회는 교무팀 계정을 이용해 주세요.")
-        tab1 = st.container()
+        st.info("🔒 **조교 계정**은 '마감 실사 등록'과 '재고 대시보드' 조회가 가능합니다. 입/출고 등록은 교무팀 계정을 이용해 주세요.")
+        tab1, tab3 = st.tabs(["📝 마감 실사 등록", "📊 재고 대시보드"])
 
     def get_safe_inventory_df():
         try:
@@ -1005,7 +1005,7 @@ elif menu == "📦 물품/비품 재고 관리":
             st.markdown('</div>', unsafe_allow_html=True)
 
     # 탭 3: 현황 및 누적 계산
-    if is_full_admin:
+    if can_access_inventory:
         with tab3:
             df_i = get_safe_inventory_df()
 
