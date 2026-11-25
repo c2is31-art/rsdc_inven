@@ -6,6 +6,7 @@ import time
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import gspread
 import pandas as pd
@@ -37,9 +38,19 @@ st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True
 # ==========================================
 # 앱 버전 및 업데이트 이력 정의
 # ==========================================
-APP_VERSION = "v2.2.1"
+APP_VERSION = "v2.3.0"
 LAST_UPDATED = "2026-11-25"
 UPDATE_HISTORY = [
+    {
+        "version": "v2.3.0",
+        "date": "2026.11.25",
+        "changes": [
+            "공간구분 확장: 강의실 '603호' 추가 및 기타공간(층별 복도·로비, 3~7층 담임공간, 201~204·6~7층 강사교무실, 7층 원장실) 전면 추가",
+            "UI/UX 전면 개선: 상단 히어로 배너, 4종 KPI 상태 카드, 원터치 공간 선택 알약 버튼, 선택 위치별 QR URL 생성기 추가",
+            "재고 관리 UX 고도화: 마감 실사 전산 대비 변동·부족 예측 미리보기, 일괄 입출고 실시간 요약, 대시보드 품목 필터 및 상태 배지(정상/발주필요) 추가",
+            "현황 및 관리자 UX 개선: 미처리 건 전용 필터, 상태별 컬러 강조 모바일 카드, 사용자 역할 KPI 및 검색 필터 추가",
+        ],
+    },
     {
         "version": "v2.2.1",
         "date": "2026.11.25",
@@ -269,7 +280,7 @@ def safe_delete_cookie(name: str):
 
 
 # ==========================================
-# Custom CSS (디자인 및 시각성 개선)
+# Custom CSS (모던 UI/UX 디자인 시스템)
 # ==========================================
 st.markdown("""
     <style>
@@ -288,66 +299,176 @@ st.markdown("""
     }
 
     .block-container {
-        padding-top: 1.8rem !important;
-        max-width: 1280px;
+        padding-top: 1.6rem !important;
+        padding-bottom: 2.5rem !important;
+        max-width: 1320px;
     }
 
     /* 사이드바 스타일 개선 */
     [data-testid="stSidebar"] {
-        background-color: #111827 !important;
+        background: linear-gradient(180deg, #0f172a 0%, #111827 100%) !important;
         border-right: 1px solid #1f2937;
     }
     [data-testid="stSidebar"] * {
         color: #f3f4f6 !important;
     }
-    [data-testid="stSidebar"] hr { border-color: #374151 !important; margin: 1.2rem 0; }
+    [data-testid="stSidebar"] hr { border-color: #334155 !important; margin: 1.1rem 0; }
 
     /* 사이드바 라디오 버튼 */
     [data-testid="stSidebar"] [data-testid="stRadio"] label p {
         color: #f3f4f6 !important;
         font-weight: 500 !important;
-        font-size: 0.95rem !important;
+        font-size: 0.94rem !important;
     }
     [data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] > label {
-        padding: 12px 14px;
-        border-radius: 8px;
-        margin-bottom: 8px;
+        padding: 11px 14px;
+        border-radius: 10px;
+        margin-bottom: 6px;
         background-color: transparent;
         transition: all 0.2s ease;
     }
     [data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] > label:hover {
-        background-color: #1f2937 !important;
+        background-color: #1e293b !important;
     }
     [data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] > label[aria-checked="true"] {
-        background-color: #2563eb !important;
+        background: linear-gradient(90deg, #2563eb, #1d4ed8) !important;
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
     }
 
-    /* 🔥 본문 메인 영역 라디오 버튼 (알약 형태) */
+    /* 🔥 본문 메인 영역 라디오 버튼 (반응형 알약 형태) */
+    .stMainBlockContainer [data-testid="stRadio"] div[role="radiogroup"] {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+    }
     .stMainBlockContainer [data-testid="stRadio"] label p,
     .stMainBlockContainer [data-testid="stRadio"] div[role="radiogroup"] label p {
         color: #334155 !important;
         font-weight: 600 !important;
-        font-size: 0.95rem !important;
+        font-size: 0.92rem !important;
     }
     .stMainBlockContainer [data-testid="stRadio"] div[role="radiogroup"] > label {
         background-color: #ffffff !important;
-        border: 1px solid #e2e8f0 !important;
+        border: 1.5px solid #e2e8f0 !important;
         padding: 8px 16px !important;
         border-radius: 99px !important;
-        margin-right: 8px !important;
+        margin-right: 0 !important;
         box-shadow: 0 1px 2px rgba(0,0,0,0.03);
-        transition: all 0.2s ease;
+        transition: all 0.18s ease;
     }
     .stMainBlockContainer [data-testid="stRadio"] div[role="radiogroup"] > label:hover {
         background-color: #f8fafc !important;
-        border-color: #cbd5e1 !important;
+        border-color: #94a3b8 !important;
     }
     .stMainBlockContainer [data-testid="stRadio"] div[role="radiogroup"] > label[aria-checked="true"] {
-        background-color: #e0e7ff !important;
-        border-color: #4f46e5 !important;
+        background-color: #eff6ff !important;
+        border-color: #2563eb !important;
+        box-shadow: 0 2px 6px rgba(37, 99, 235, 0.14);
     }
     .stMainBlockContainer [data-testid="stRadio"] div[role="radiogroup"] > label[aria-checked="true"] p {
-        color: #4338ca !important;
+        color: #1d4ed8 !important;
+    }
+
+    /* 히어로 헤더 배너 */
+    .hero-header {
+        background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #2563eb 100%);
+        color: #ffffff !important;
+        border-radius: 16px;
+        padding: 22px 26px;
+        margin-bottom: 20px;
+        box-shadow: 0 10px 24px -6px rgba(30, 58, 138, 0.25);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+    .hero-header * { color: #ffffff !important; }
+    .hero-title {
+        font-size: 1.45rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        margin: 0;
+        line-height: 1.25;
+    }
+    .hero-sub {
+        font-size: 0.88rem;
+        color: #dbeafe !important;
+        margin-top: 5px;
+    }
+    .hero-badges {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+    .hero-pill {
+        background: rgba(255,255,255,0.16);
+        border: 1px solid rgba(255,255,255,0.28);
+        padding: 5px 13px;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 600;
+    }
+
+    /* 반응형 KPI 카드 그리드 */
+    .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 12px;
+        margin-bottom: 18px;
+    }
+    .kpi-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 14px 18px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+        border-top: 3px solid #3b82f6;
+    }
+    .kpi-card.kpi-blue { border-top-color: #2563eb; }
+    .kpi-card.kpi-amber { border-top-color: #d97706; }
+    .kpi-card.kpi-green { border-top-color: #16a34a; }
+    .kpi-card.kpi-red { border-top-color: #dc2626; }
+    .kpi-card.kpi-slate { border-top-color: #475569; }
+    .kpi-label {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #64748b;
+        margin-bottom: 4px;
+    }
+    .kpi-value {
+        font-size: 1.45rem;
+        font-weight: 800;
+        color: #0f172a;
+        line-height: 1.2;
+    }
+    .kpi-sub {
+        font-size: 0.75rem;
+        color: #94a3b8;
+        margin-top: 3px;
+    }
+
+    /* 위치 요약 배너 & 단계 라벨 */
+    .step-badge {
+        display: inline-block;
+        background: #e0e7ff;
+        color: #3730a3 !important;
+        font-size: 0.75rem;
+        font-weight: 700;
+        padding: 3px 10px;
+        border-radius: 999px;
+        margin-bottom: 8px;
+    }
+    .loc-banner {
+        background: #f8fafc;
+        border: 1px solid #cbd5e1;
+        border-left: 4px solid #2563eb;
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin: 10px 0 14px 0;
+        font-size: 0.9rem;
+        color: #1e293b;
     }
 
     /* 유저 카드 (사이드바) */
@@ -355,8 +476,8 @@ st.markdown("""
         background: linear-gradient(135deg, #1e3a8a, #3b82f6);
         border-radius: 12px;
         padding: 16px;
-        margin-bottom: 16px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        margin-bottom: 14px;
+        box-shadow: 0 4px 10px -1px rgba(0, 0, 0, 0.18);
     }
     .user-card .u-name { font-size: 1.1rem; font-weight: 700; color: white !important;}
     .user-card .u-role {
@@ -364,7 +485,7 @@ st.markdown("""
         margin-top: 6px;
         font-size: 0.75rem;
         font-weight: 600;
-        background: rgba(255,255,255,0.2);
+        background: rgba(255,255,255,0.22);
         padding: 3px 10px;
         border-radius: 999px;
         color: white !important;
@@ -376,9 +497,9 @@ st.markdown("""
         font-weight: 700 !important;
         letter-spacing: -0.02em !important;
     }
-    h1 { font-size: 1.75rem !important; margin-bottom: 1rem !important; }
-    h2 { font-size: 1.35rem !important; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.5rem; margin-bottom: 1rem;}
-    h3 { font-size: 1.15rem !important; }
+    h1 { font-size: 1.7rem !important; margin-bottom: 0.9rem !important; }
+    h2 { font-size: 1.3rem !important; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.45rem; margin-bottom: 0.9rem;}
+    h3 { font-size: 1.12rem !important; }
 
     [data-testid="stCaptionContainer"], .stCaption {
         font-size: 0.85rem !important;
@@ -391,41 +512,53 @@ st.markdown("""
         background-color: #ffffff !important;
         color: #1e293b !important;
         border: 1px solid #cbd5e1 !important;
-        border-radius: 8px !important;
-        padding: 10px 12px;
+        border-radius: 10px !important;
         transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
     .stTextInput input:focus, .stSelectbox div[data-baseweb="select"]:focus-within,
     .stNumberInput input:focus, .stTextArea textarea:focus {
-        border-color: #3b82f6 !important;
-        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
+        border-color: #2563eb !important;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15) !important;
     }
 
     /* 버튼 스타일 */
     .stButton>button, .stFormSubmitButton>button {
-        border-radius: 8px;
+        border-radius: 10px;
+        min-height: 44px;
         font-weight: 600;
         background-color: #1e40af !important;
         color: #ffffff !important;
         border: none;
-        padding: 0.6rem 1.2rem;
+        padding: 0.55rem 1.2rem;
         transition: all 0.2s ease;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        box-shadow: 0 2px 4px rgba(30, 64, 175, 0.15);
     }
     .stButton>button:hover, .stFormSubmitButton>button:hover {
         background-color: #1d4ed8 !important;
         transform: translateY(-1px);
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        box-shadow: 0 6px 12px -2px rgba(29, 78, 216, 0.25);
     }
     .stButton>button:active, .stFormSubmitButton>button:active {
         transform: translateY(0);
     }
 
+    /* 사이드바 내부 버튼은 컴팩트하게 유지 */
+    [data-testid="stSidebar"] .stButton>button {
+        min-height: 38px;
+        background-color: #1e293b !important;
+        border: 1px solid #334155 !important;
+        font-size: 0.85rem;
+    }
+    [data-testid="stSidebar"] .stButton>button:hover {
+        background-color: #334155 !important;
+    }
+
     /* 탭 스타일 */
     .stTabs [data-baseweb="tab-list"] { 
-        gap: 8px; 
-        border-bottom: 1px solid #e2e8f0;
-        padding-bottom: 2px;
+        gap: 6px; 
+        border-bottom: 2px solid #e2e8f0;
+        padding-bottom: 0;
+        flex-wrap: wrap;
     }
     .stTabs [data-baseweb="tab"] {
         background-color: transparent;
@@ -433,10 +566,10 @@ st.markdown("""
         padding: 10px 16px;
         font-weight: 600;
         color: #64748b !important;
-        border-radius: 6px 6px 0 0;
+        border-radius: 8px 8px 0 0;
     }
     .stTabs [aria-selected="true"] {
-        background-color: transparent !important;
+        background-color: #eff6ff !important;
         color: #1e40af !important;
         border-bottom: 3px solid #1e40af;
     }
@@ -446,58 +579,65 @@ st.markdown("""
     .section-card {
         background: #ffffff;
         border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 24px;
-        margin-bottom: 24px;
-        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02), 0 2px 4px -1px rgba(0,0,0,0.02);
+        border-radius: 14px;
+        padding: 22px 24px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 10px -2px rgba(15, 23, 42, 0.04);
     }
 
     /* 뱃지 */
-    .badge { display:inline-block; padding: 4px 12px; border-radius:6px; font-size:0.75rem; font-weight:700; letter-spacing: 0.02em;}
+    .badge { display:inline-block; padding: 4px 12px; border-radius:999px; font-size:0.75rem; font-weight:700; letter-spacing: 0.02em;}
     .badge-접수완료 { background:#dbeafe; color:#1e40af !important; border: 1px solid #bfdbfe; }
     .badge-처리중 { background:#fef3c7; color:#92400e !important; border: 1px solid #fde68a;}
     .badge-완료 { background:#dcfce7; color:#166534 !important; border: 1px solid #bbf7d0;}
 
     /* 로그인/메인 패널 */
     .brand-panel {
-        background: linear-gradient(135deg, #0f172a, #1e3a8a);
-        border-radius: 16px;
+        background: linear-gradient(145deg, #0f172a 0%, #1e3a8a 70%, #1d4ed8 100%);
+        border-radius: 18px;
         padding: 36px;
         height: 100%;
         color: #fff !important;
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        box-shadow: 0 14px 28px -8px rgba(15, 23, 42, 0.28);
     }
     .brand-panel * { color: #fff !important; }
     .brand-panel h1 { font-size: 1.8rem !important; margin-bottom: 12px !important; line-height: 1.3;}
     .brand-panel p { color: #cbd5e1 !important; font-size: 0.95rem; line-height: 1.6; }
+    .feature-chip {
+        display: inline-block;
+        background: rgba(255,255,255,0.14);
+        border: 1px solid rgba(255,255,255,0.22);
+        padding: 5px 12px;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        margin: 4px 6px 4px 0;
+    }
 
     /* 재고 부족 필 */
     .low-stock-pill {
         display:inline-block; background:#fee2e2; color:#991b1b !important;
-        padding: 4px 10px; border-radius: 6px; font-size:0.8rem; font-weight:600; margin: 4px 4px 0 0;
+        padding: 4px 11px; border-radius: 999px; font-size:0.8rem; font-weight:600; margin: 4px 4px 0 0;
         border: 1px solid #fca5a5;
     }
 
-    /* 테이블 스타일링 */
-    .scroll-table { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 8px; border: 1px solid #e2e8f0; }
-    .scroll-table table { width: 100%; border-collapse: collapse; background-color: white;}
-    .scroll-table th { background-color: #f8fafc; font-weight: 600; color: #475569; text-transform: uppercase; font-size: 0.75rem; padding: 12px 16px; border-bottom: 2px solid #e2e8f0;}
-    .scroll-table td { padding: 12px 16px; border-bottom: 1px solid #e2e8f0; font-size: 0.85rem; color: #334155; }
-    .scroll-table tr:hover { background-color: #f1f5f9; }
-
-    /* 모바일 시설 요청 카드 스타일 */
+    /* 모바일 시설 요청 카드 스타일 (상태별 컬러 라인) */
     .req-card {
         background: #ffffff;
         border: 1px solid #e2e8f0;
+        border-left: 5px solid #2563eb;
         border-radius: 12px;
-        padding: 18px 20px;
-        margin-bottom: 16px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.03);
+        padding: 16px 18px;
+        margin-bottom: 14px;
+        box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
         transition: transform 0.15s ease, box-shadow 0.15s ease;
     }
+    .req-card.req-card-접수완료 { border-left-color: #2563eb; }
+    .req-card.req-card-처리중 { border-left-color: #d97706; }
+    .req-card.req-card-완료 { border-left-color: #16a34a; }
     .req-card:hover {
         transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.06);
+        box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
     }
     .req-card-header {
         display: flex;
@@ -509,16 +649,16 @@ st.markdown("""
     }
     .req-card-meta {
         font-size: 0.85rem;
-        color: #64748b;
+        color: #475569;
         margin-bottom: 8px;
-        line-height: 1.5;
+        line-height: 1.55;
     }
     .req-card-body {
-        font-size: 0.95rem;
-        color: #1e293b;
+        font-size: 0.94rem;
+        color: #0f172a;
         white-space: pre-line;
         background: #f8fafc;
-        padding: 12px;
+        padding: 12px 14px;
         border-radius: 8px;
         margin-bottom: 8px;
         border: 1px solid #f1f5f9;
@@ -529,18 +669,18 @@ st.markdown("""
         background: #e0f2fe;
         border: 1px solid #bae6fd;
         padding: 8px 12px;
-        border-radius: 6px;
+        border-radius: 8px;
         margin-bottom: 8px;
     }
     .req-photo-link {
         display: inline-block;
         font-size: 0.82rem;
         font-weight: 600;
-        color: #2563eb !important;
+        color: #1d4ed8 !important;
         text-decoration: none;
-        padding: 4px 10px;
+        padding: 6px 12px;
         border: 1px solid #bfdbfe;
-        border-radius: 6px;
+        border-radius: 8px;
         background-color: #eff6ff;
     }
     .req-photo-link:hover {
@@ -551,7 +691,7 @@ st.markdown("""
     [data-testid="stMetric"] {
         background-color: white;
         border: 1px solid #e2e8f0;
-        padding: 15px 20px;
+        padding: 14px 18px;
         border-radius: 12px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
@@ -559,10 +699,13 @@ st.markdown("""
     [data-testid="stMetricLabel"] { font-weight: 600 !important; color: #64748b !important; font-size: 0.85rem;}
 
     @media (max-width: 640px) {
-        .block-container { padding-left: 1rem !important; padding-right: 1rem !important; }
-        .brand-panel { padding: 24px; border-radius: 12px; }
+        .block-container { padding-left: 0.9rem !important; padding-right: 0.9rem !important; padding-top: 1rem !important; }
+        .brand-panel { padding: 22px; border-radius: 14px; }
         .brand-panel h1 { font-size: 1.4rem !important; }
-        .section-card { padding: 16px; border-radius: 8px; }
+        .hero-header { padding: 16px 18px; border-radius: 12px; }
+        .hero-title { font-size: 1.2rem; }
+        .section-card { padding: 16px; border-radius: 12px; }
+        .kpi-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
     }
     </style>
 """, unsafe_allow_html=True)
@@ -759,7 +902,6 @@ def sync_sheets(bundle, sheet_names=None, force: bool = False) -> bool:
         all_have_cache = all(store[n]["records"] is not None for n in stale)
         for n in stale:
             if store[n]["records"] is not None:
-                # 15초간 추가 API 요청을 억제하여 할당량 회복 유도
                 store[n]["ts"] = now - store[n]["ttl"] + 15
         if all_have_cache:
             store["using_stale"] = True
@@ -812,7 +954,7 @@ FACILITY_HAS_ID = "요청ID" in FACILITY_HEADER
 
 
 # ==========================================
-# 캐시된 데이터 접근 래퍼 (하위 호환 + 안전한 갱신)
+# 캐시된 데이터 접근 래퍼
 # ==========================================
 def get_facility_records_with_rows():
     sync_sheets(bundle, ["facility"])
@@ -899,8 +1041,38 @@ def status_badge(status):
     return f'<span class="badge badge-{status}">{status}</span>'
 
 
+def render_hero(title: str, subtitle: str, badges: list):
+    badges_html = "".join([f'<span class="hero-pill">{html.escape(str(b))}</span>' for b in badges])
+    st.markdown(f"""
+        <div class="hero-header">
+            <div>
+                <div class="hero-title">{html.escape(title)}</div>
+                <div class="hero-sub">{html.escape(subtitle)}</div>
+            </div>
+            <div class="hero-badges">{badges_html}</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+
+def render_kpi_cards(items: list):
+    cards = []
+    for it in items:
+        color = it.get("color", "blue")
+        label = html.escape(str(it.get("label", "")))
+        value = html.escape(str(it.get("value", "")))
+        sub = html.escape(str(it.get("sub", "")))
+        sub_html = f'<div class="kpi-sub">{sub}</div>' if sub else ""
+        cards.append(
+            f'<div class="kpi-card kpi-{color}">'
+            f'<div class="kpi-label">{label}</div>'
+            f'<div class="kpi-value">{value}</div>'
+            f'{sub_html}</div>'
+        )
+    st.markdown(f'<div class="kpi-grid">{"".join(cards)}</div>', unsafe_allow_html=True)
+
+
 # ==========================================
-# 물품/공간/분류 목록
+# 물품/공간/분류 목록 (확장된 공간 구성 반영)
 # ==========================================
 CONSUMABLES_BASE = [
     "A4용지", "A3용지", "B4용지", "미색A4용지", "미색A3용지",
@@ -922,17 +1094,44 @@ EQUIPMENT_DEFAULT = [
 ]
 
 SPACES_DEFAULT = {
-    "강의실": ["대형강의실", "201호", "202호", "203호", "204호", "601호", "602호", "701호", "702호", "703호", "704호"],
-    "자습관": ["3-1관", "3-2관", "3-3관", "3-4관", "3-5관", "4-1관", "4-2관", "4-3관", "4-4관", "4-5관", "5-1관", "5-2관", "5-3관", "6-1관", "6-2관", "7-1관"],
-    "화장실": ["2층 남자화장실", "2층 여자화장실", "3층 남자화장실", "3층 여자화장실", "5층 남자화장실", "5층 여자화장실", "6층 남자화장실", "6층 여자화장실", "7층 남자화장실", "7층 여자화장실"],
-    "기타공간": ["기타공간 (복도/엘리베이터/로비/사무실 등)"]
+    "강의실": [
+        "대형강의실",
+        "201호", "202호", "203호", "204호",
+        "601호", "602호", "603호",
+        "701호", "702호", "703호", "704호"
+    ],
+    "자습관": [
+        "3-1관", "3-2관", "3-3관", "3-4관", "3-5관",
+        "4-1관", "4-2관", "4-3관", "4-4관", "4-5관",
+        "5-1관", "5-2관", "5-3관",
+        "6-1관", "6-2관", "7-1관"
+    ],
+    "화장실": [
+        "2층 남자화장실", "2층 여자화장실",
+        "3층 남자화장실", "3층 여자화장실",
+        "5층 남자화장실", "5층 여자화장실",
+        "6층 남자화장실", "6층 여자화장실",
+        "7층 남자화장실", "7층 여자화장실"
+    ],
+    "기타공간": [
+        "3층 담임공간", "4층 담임공간", "5층 담임공간", "6층 담임공간", "7층 담임공간",
+        "201 강사교무실", "202 강사교무실", "203 강사교무실", "204 강사교무실",
+        "6층 강사교무실", "7층 강사교무실", "7층 원장실",
+        "2층 로비", "3층 로비", "4층 로비", "5층 로비", "6층 로비", "7층 로비",
+        "2층 복도", "3층 복도", "4층 복도", "5층 복도", "6층 복도", "7층 복도",
+        "기타공간 (복도/엘리베이터/로비/사무실 등)"
+    ]
 }
 
 CATEGORY_BY_SPACE_DEFAULT = {
     "강의실": ["빔프로젝터/음향", "냉난방/환기", "조명/전기", "책상/의자/칠판", "문/창문/열쇠", "신규 물품 구매 요청", "기타 시설"],
     "자습관": ["자습관 책상/시디즈 의자", "스탠드/전기/콘센트", "냉난방/공기청정기", "공용 스탠딩 책상", "문/창문/소음 문제", "신규 물품 구매 요청", "기타 시설"],
     "화장실": ["대변기 (막힘/고장/부속)", "소변기 (막힘/자동센서/누수)", "세면대/수도꼭지", "휴지걸이/비누디스펜서", "조명/환풍기", "바닥 배수구/타일", "신규 물품 구매 요청", "기타 시설"],
-    "기타공간": ["엘리베이터", "복도/계단/난간", "정수기/음료대", "자동문/출입문", "조명/전기", "신규 물품 구매 요청", "기타 시설"]
+    "기타공간": [
+        "조명/전기", "냉난방/환기", "책상/의자/사무집기", "네트워크/프린터/OA",
+        "엘리베이터", "복도/계단/난간", "정수기/음료대", "자동문/출입문",
+        "문/출입문/열쇠", "신규 물품 구매 요청", "기타 시설"
+    ]
 }
 
 
@@ -986,7 +1185,6 @@ if not st.session_state["logged_in"]:
 
     if target_token:
         users_list = get_users_records()
-        # API 장애가 아닌 실제 시트 데이터 확인
         users_cache_loaded = _get_sheet_store()["users"]["records"] is not None
         df_u = pd.DataFrame(users_list)
         matched = None
@@ -1011,7 +1209,6 @@ if not st.session_state["logged_in"]:
                     safe_set_cookie("russel_auth_token", target_token, days=30)
                 st.rerun()
         elif users_cache_loaded and not _get_sheet_store().get("using_stale"):
-            # 정상 조회 결과 시트에서 삭제된 계정이면 쿠키 파기
             safe_delete_cookie("russel_auth_token")
             safe_delete_cookie("russel_user_phone")
 
@@ -1020,36 +1217,40 @@ if not st.session_state["logged_in"]:
 # 1. 로그인 & 회원가입
 # ==========================================
 if not st.session_state["logged_in"]:
-    left, right = st.columns([1, 1.3], gap="large")
+    left, right = st.columns([1.05, 1.25], gap="large")
 
     with left:
         latest_update = UPDATE_HISTORY[0]
-        latest_bullets = "".join([f"<div style='margin-bottom:4px;'>• {html.escape(c)}</div>" for c in latest_update["changes"][:3]])
+        latest_bullets = "".join([f"<div style='margin-bottom:5px;'>• {html.escape(c)}</div>" for c in latest_update["changes"][:3]])
         st.markdown(f"""
             <div class="brand-panel">
                 <h1>🏢 러셀대치학원<br>통합 관리 시스템</h1>
                 <p>시설 고장 신고, 물품 구매 요청, 소모품·비품 재고를<br>
                 한 곳에서 빠르고 직관적으로 관리하세요.</p>
-                <div style="margin-top: 22px; font-size: 0.9rem; opacity: 0.9;">
-                ✓ 시설 보수 신고 <br> ✓ 구매 요청 <br> ✓ 재고 관리
+                <div style="margin-top: 18px;">
+                    <span class="feature-chip">🔧 시설 보수 신고</span>
+                    <span class="feature-chip">🛒 구매 요청</span>
+                    <span class="feature-chip">📦 전산연동 재고</span>
+                    <span class="feature-chip">📱 QR 원스톱 접수</span>
                 </div>
-                <div style="margin-top: 28px; padding: 14px; background: rgba(255,255,255,0.1); border-radius: 10px; font-size: 0.8rem;">
-                    <div style="font-weight: 700; margin-bottom: 6px;">📌 버전: {APP_VERSION} ({latest_update['date']} 업데이트)</div>
-                    <div style="opacity: 0.9; line-height: 1.45;">{latest_bullets}</div>
+                <div style="margin-top: 24px; padding: 14px 16px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.18); border-radius: 12px; font-size: 0.8rem;">
+                    <div style="font-weight: 700; margin-bottom: 7px;">📌 버전: {APP_VERSION} ({latest_update['date']} 업데이트)</div>
+                    <div style="opacity: 0.92; line-height: 1.5;">{latest_bullets}</div>
                 </div>
             </div>
         """, unsafe_allow_html=True)
 
     with right:
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
         tab_login, tab_signup = st.tabs(["🔑 로그인", "📝 회원가입"])
 
         with tab_login:
             with st.form("login_form"):
                 st.markdown("### 로그인")
-                st.markdown("<p style='color:#64748b; font-size:0.9rem; margin-bottom: 20px;'>등록된 이름과 전화번호로 접속해주세요.</p>", unsafe_allow_html=True)
+                st.caption("등록된 이름과 전화번호로 바로 접속하세요.")
                 login_name = st.text_input("이름", placeholder="예: 홍길동")
                 login_phone = st.text_input("전화번호", type="password", placeholder="숫자만 입력 (- 없이)")
-                auto_login = st.checkbox("🔑 로그인 상태 유지 (자동 로그인)", value=True)
+                auto_login = st.checkbox("🔑 로그인 상태 유지 (30일 자동 로그인)", value=True)
                 st.write("")
                 submitted = st.form_submit_button("로그인하기", use_container_width=True)
 
@@ -1093,20 +1294,23 @@ if not st.session_state["logged_in"]:
 
         with tab_signup:
             st.markdown("### 신규 회원가입")
-            st.markdown("<p style='color:#64748b; font-size:0.9rem; margin-bottom: 20px;'>시스템 사용을 위해 계정을 생성합니다.</p>", unsafe_allow_html=True)
+            st.caption("학원 내부 구성원 인증 후 계정을 생성합니다.")
 
             signup_role = st.selectbox("가입 구분", ["직원", "강사", "교무팀", "조교"])
 
             if signup_role == "교무팀":
-                st.info("💡 **교무팀**: 시설요청 상태변경, 사용자 권한 관리 및 재고 관리 전체 권한이 부여됩니다. (관리자 가입 코드 필요)")
+                st.info("💡 **교무팀**: 시설요청 상태·메모 관리, 사용자 권한 관리, 재고 전체 관리 권한 (관리자 가입 코드 필요)")
             elif signup_role == "조교":
-                st.info("💡 **조교**: 시설보수/구매요청, 마감 실사 등록 및 재고 대시보드 열람 권한이 부여됩니다. (관리자 가입 코드 필요)")
+                st.info("💡 **조교**: 시설보수/구매요청, 마감 실사 등록 및 재고 대시보드 열람 권한 (관리자 가입 코드 필요)")
             else:
-                st.info("💡 **직원/강사**: 시설보수 및 물품 구매 요청 등록/조회가 가능합니다. (학원 가입 코드 필요)")
+                st.info("💡 **직원/강사**: 시설보수 및 물품 구매 요청 등록·진행현황 조회 가능 (학원 가입 코드 필요)")
 
-            signup_name = st.text_input("이름", key="s_name", placeholder="예: 홍길동")
-            signup_phone = st.text_input("전화번호", key="s_phone", placeholder="숫자만 입력 (- 없이)")
-            st.caption("전화번호는 로그인 시 비밀번호처럼 사용됩니다. 8자리 이상 입력해 주세요.")
+            col_su1, col_su2 = st.columns(2)
+            with col_su1:
+                signup_name = st.text_input("이름", key="s_name", placeholder="예: 홍길동")
+            with col_su2:
+                signup_phone = st.text_input("전화번호", key="s_phone", placeholder="숫자만 입력 (- 없이)")
+            st.caption("전화번호는 로그인 비밀번호로 사용되며 8자리 이상 입력해 주세요.")
 
             signup_code_input = st.text_input(
                 "학원 가입 코드",
@@ -1114,7 +1318,6 @@ if not st.session_state["logged_in"]:
                 key="s_code",
                 placeholder="학원에서 안내받은 가입 코드 입력"
             )
-            st.caption("※ 보안을 위해 승인된 가입 코드를 입력해야 계정이 생성됩니다.")
 
             st.write("")
             if st.button("회원가입 완료", use_container_width=True, key="signup_btn"):
@@ -1133,7 +1336,6 @@ if not st.session_state["logged_in"]:
                 elif signup_role not in ["교무팀", "조교"] and c_code != SIGNUP_CODE:
                     st.error("🔒 학원 가입 코드가 일치하지 않습니다. 관리자에게 문의해 주세요.")
                 else:
-                    # 중복 가입 방지 (전화번호 기준, 앞자리 0 누락 포함 비교)
                     df_u = pd.DataFrame(get_users_records())
                     input_vars = phone_variants(c_phone)
                     is_duplicate = False
@@ -1159,15 +1361,26 @@ if not st.session_state["logged_in"]:
                         st.session_state["user_role"] = signup_role
                         st.success("✅ 회원가입 및 로그인 완료!")
                         st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        with st.expander("📜 최근 업데이트 내역 보기"):
+            for item in UPDATE_HISTORY:
+                st.markdown(f"**{item['version']}** ({item['date']})")
+                for ch in item["changes"]:
+                    st.markdown(f"- {ch}")
     st.stop()
 
 
 # ==========================================
 # 2. 메인 화면 및 사이드바 메뉴
 # ==========================================
+sync_badge_text = "🟡 캐시 모드" if _store_state.get("using_stale") else "🟢 실시간 연동"
 st.sidebar.markdown(f"""
     <div class="user-card">
-        <div style="font-size: 0.8rem; opacity: 0.8; margin-bottom: 4px;">{get_kst_now()} (KST)</div>
+        <div style="display:flex; justify-content:space-between; font-size: 0.76rem; opacity: 0.85; margin-bottom: 4px;">
+            <span>{get_kst_now()} (KST)</span>
+            <span>{sync_badge_text}</span>
+        </div>
         <div class="u-name">👤 {html.escape(st.session_state['user_name'])}</div>
         <span class="u-role">{html.escape(st.session_state['user_role'])}</span>
     </div>
@@ -1190,7 +1403,7 @@ with col_sb2:
         st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<h4 style='color: white !important; font-size: 1rem; margin-bottom: 10px;'>메뉴 이동</h4>", unsafe_allow_html=True)
+st.sidebar.markdown("<h4 style='color: white !important; font-size: 0.95rem; margin-bottom: 8px;'>메뉴 이동</h4>", unsafe_allow_html=True)
 
 user_role = st.session_state["user_role"]
 is_full_admin = (user_role == "교무팀")
@@ -1210,17 +1423,15 @@ menu = st.sidebar.radio("Navigation", menu_options, label_visibility="collapsed"
 st.sidebar.markdown("---")
 latest_ver = UPDATE_HISTORY[0]
 st.sidebar.markdown(f"""
-    <div style="background: rgba(255,255,255,0.06); border: 1px solid #374151; border-radius: 10px; padding: 12px; margin-top: 6px;">
-        <div style="color: #60a5fa; font-weight: 700; font-size: 0.85rem; margin-bottom: 4px;">
+    <div style="background: rgba(255,255,255,0.06); border: 1px solid #334155; border-radius: 10px; padding: 12px; margin-top: 6px;">
+        <div style="color: #60a5fa; font-weight: 700; font-size: 0.84rem; margin-bottom: 5px;">
             📌 버전: {APP_VERSION} ({latest_ver['date']} 업데이트)
         </div>
-        <div style="color: #cbd5e1; font-size: 0.74rem; line-height: 1.45; margin-top: 6px;">
-            • 두레이 웹훅 인식·전송 개선 & 테스트 UI<br>
-            • 429 API 할당량 초과 방지 & 캐시 폴백<br>
-            • 가입코드·토큰 보안 & 권한관리 UI<br>
-            • 조교 재고 대시보드 & 일괄 입·출고<br>
-            • 전산재고 연동 실사 & 층별·발주 표<br>
-            • 중복알림·처리메모·모바일 카드·QR
+        <div style="color: #cbd5e1; font-size: 0.74rem; line-height: 1.48;">
+            • 603호·담임공간·교무실·원장실·복도·로비 추가<br>
+            • 히어로 배너·KPI 카드·원터치 위치 UI 개편<br>
+            • 두레이 웹훅 탐색·테스트 UI & 429 방어<br>
+            • 전산연동 실사·일괄 입출고·발주목록 CSV
         </div>
     </div>
 """, unsafe_allow_html=True)
@@ -1231,7 +1442,6 @@ with st.sidebar.expander("📜 전체 업데이트 상세 보기"):
         for ch in item["changes"]:
             st.markdown(f"- {ch}")
 
-# st.rerun() 이후 유지되는 두레이 알림 피드백 표시
 if "dooray_flash" in st.session_state:
     flash_kind, flash_msg = st.session_state.pop("dooray_flash")
     if flash_kind == "ok":
@@ -1244,17 +1454,27 @@ if "dooray_flash" in st.session_state:
 # 3. 요청 등록 (시설 보수 및 구매 요청)
 # ==========================================
 if menu == "🛠️ 시설 보수 및 구매 요청":
-    st.title("🛠️ 시설 보수 및 물품 구매 요청")
+    render_hero(
+        "🛠️ 시설 보수 및 물품 구매 요청",
+        "고장 신고 및 비품 구매 요청을 빠르게 접수하고 실시간 처리 현황을 확인하세요.",
+        [f"👤 {st.session_state['user_name']} ({user_role})", f"📌 {APP_VERSION}"]
+    )
     tab1, tab2 = st.tabs(["📝 새로운 요청 등록", "📋 진행 현황 확인"])
 
     with tab1:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
-        st.markdown("### 어떤 요청을 하시겠습니까?")
-        req_type = st.radio("요청 유형 선택", ["🔧 시설 보수 요청", "🛒 신규 물품/비품 구매 요청"], horizontal=True, label_visibility="collapsed")
-        
-        st.write("")
+        st.markdown('<span class="step-badge">STEP 1 · 요청 유형 선택</span>', unsafe_allow_html=True)
+        req_type = st.radio(
+            "요청 유형 선택",
+            ["🔧 시설 보수 요청", "🛒 신규 물품/비품 구매 요청"],
+            horizontal=True,
+            label_visibility="collapsed"
+        )
 
-        # QR코드 쿼리 파라미터 확인 (?space=강의실&detail=201호)
+        st.write("")
+        st.markdown('<span class="step-badge">STEP 2 · 공간 및 위치 선택</span>', unsafe_allow_html=True)
+
+        # QR코드 쿼리 파라미터 확인 (?space=강의실&detail=603호)
         try:
             qp = st.query_params
             param_space = qp.get("space", None)
@@ -1270,13 +1490,16 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
         space_keys = list(SPACES.keys())
         def_space_idx = space_keys.index(param_space) if (param_space and param_space in space_keys) else 0
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            space_cat = st.selectbox("공간 구분", space_keys, index=def_space_idx)
-        with col_b:
-            det_options = SPACES[space_cat]
-            def_detail_idx = det_options.index(param_detail) if (param_detail and param_detail in det_options) else 0
-            det_space = st.selectbox("세부 위치", det_options, index=def_detail_idx)
+        space_cat = st.radio("공간 구분", space_keys, index=def_space_idx, horizontal=True)
+
+        det_options = SPACES[space_cat]
+        def_detail_idx = det_options.index(param_detail) if (param_detail and param_detail in det_options) else 0
+        det_space = st.selectbox("세부 위치 (직접 검색 가능)", det_options, index=def_detail_idx)
+
+        st.markdown(
+            f'<div class="loc-banner">📍 선택된 위치: <b>{html.escape(space_cat)}</b> &rsaquo; <b>{html.escape(det_space)}</b></div>',
+            unsafe_allow_html=True
+        )
 
         # 중복 신고 방지 알림 검사
         df_facility_all = pd.DataFrame(get_facility_records())
@@ -1295,14 +1518,19 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
                     u_desc = html.escape(str(un_row.get("상세내용", "-"))[:70])
                     st.markdown(f"- 🗓️ `{u_dt}` | **{u_cat}** | `{u_st}` | 작성자: `{u_name}`<br>&nbsp;&nbsp;↳ *{u_desc}*", unsafe_allow_html=True)
 
+        if is_full_admin or is_silsa_staff:
+            with st.expander("🔗 이 위치 전용 QR 접속 링크 확인"):
+                qr_link = f"https://rsdc-inven.streamlit.app/?space={quote(space_cat)}&detail={quote(det_space)}"
+                st.caption("아래 링크를 QR코드로 생성해 부착하면 스캔 즉시 해당 공간이 자동 선택됩니다.")
+                st.code(qr_link, language="text")
+
         st.markdown("---")
-        
+        st.markdown('<span class="step-badge">STEP 3 · 상세 내용 및 사진 첨부</span>', unsafe_allow_html=True)
+
         if req_type == "🔧 시설 보수 요청":
-            st.markdown("#### 고장/보수 내용 입력")
             cat = st.selectbox("보수 분류", [c for c in CATEGORY_BY_SPACE[space_cat] if c != "신규 물품 구매 요청"])
             details = st.text_area("상세 고장 내용", placeholder="예: 에어컨에서 이상한 소음이 나고 냉방이 잘 안됩니다.", height=120)
-            
-            st.write("")
+
             photo_file = st.file_uploader("📷 현장 사진 첨부 (선택사항, 8MB 이하)", type=["png", "jpg", "jpeg"])
             if photo_file is not None:
                 st.image(photo_file, caption="첨부 미리보기", width=240)
@@ -1341,16 +1569,14 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
                 else:
                     st.error("상세 내용을 입력해 주세요.")
         else:
-            st.markdown("#### 구매 물품 정보 입력")
             col_i1, col_i2 = st.columns([3, 1])
             with col_i1:
                 item_n = st.text_input("구매 물품명", placeholder="예: 무선 마우스")
             with col_i2:
                 item_q = st.number_input("수량", min_value=1, value=1)
-                
+
             item_r = st.text_area("구매 사유 및 목적", placeholder="예: 기존 마우스 고장으로 교체 필요", height=100)
-            
-            st.write("")
+
             photo_file = st.file_uploader("📷 참고 사진/자료 첨부 (선택사항, 8MB 이하)", type=["png", "jpg", "jpeg"])
             if photo_file is not None:
                 st.image(photo_file, caption="첨부 미리보기", width=240)
@@ -1400,19 +1626,33 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
         else:
             sheet_row_map = {idx: f_row_nums[idx] for idx in range(len(f_row_nums))}
 
-            st.markdown('<div class="section-card" style="padding-bottom: 12px;">', unsafe_allow_html=True)
+            total_cnt = len(df_f)
+            recv_cnt = int((df_f.get("상태") == "접수완료").sum()) if "상태" in df_f.columns else 0
+            prog_cnt = int((df_f.get("상태") == "처리중").sum()) if "상태" in df_f.columns else 0
+            done_cnt = int((df_f.get("상태") == "완료").sum()) if "상태" in df_f.columns else 0
+
+            render_kpi_cards([
+                {"label": "전체 요청", "value": f"{total_cnt}건", "color": "slate"},
+                {"label": "🔵 접수완료", "value": f"{recv_cnt}건", "color": "blue"},
+                {"label": "🟡 처리중", "value": f"{prog_cnt}건", "color": "amber"},
+                {"label": "🟢 처리완료", "value": f"{done_cnt}건", "color": "green"},
+            ])
+
+            st.markdown('<div class="section-card" style="padding-bottom: 14px;">', unsafe_allow_html=True)
             f1, f2, f3 = st.columns([1, 1, 2])
             with f1:
                 space_filter = st.selectbox("공간 필터", ["전체"] + list(SPACES.keys()))
             with f2:
                 status_filter = st.selectbox("상태 필터", ["전체"] + STATUS_OPTIONS)
             with f3:
-                keyword = st.text_input("🔍 내용/작성자 검색", placeholder="검색어를 입력하세요")
+                keyword = st.text_input("🔍 위치/내용/작성자 검색", placeholder="검색어를 입력하세요 (예: 603호, 담임공간)")
 
-            col_sub1, col_sub2 = st.columns([2, 1])
+            col_sub1, col_sub2, col_sub3 = st.columns([1.2, 1.2, 1.6])
             with col_sub1:
                 show_mine = st.checkbox("🙋 내가 작성한 요청만 보기", value=(not is_full_admin))
             with col_sub2:
+                only_unresolved = st.checkbox("⏳ 미처리(접수·처리중)만 보기", value=False)
+            with col_sub3:
                 view_mode = st.radio("보기 모드", ["📋 표 보기", "📱 모바일 카드 보기"], horizontal=True, label_visibility="collapsed")
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1421,6 +1661,8 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
                 df_view = df_view[df_view["공간구분"] == space_filter]
             if status_filter != "전체" and "상태" in df_view.columns:
                 df_view = df_view[df_view["상태"] == status_filter]
+            if only_unresolved and "상태" in df_view.columns:
+                df_view = df_view[df_view["상태"].isin(["접수완료", "처리중"])]
             if show_mine and "작성자" in df_view.columns:
                 df_view = df_view[df_view["작성자"] == st.session_state["user_name"]]
             if keyword:
@@ -1429,13 +1671,7 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
 
             df_view = df_view.iloc[::-1]
 
-            m1, m2, m3 = st.columns(3)
-            m1.metric("총 요청 건수", f"{len(df_f)} 건")
-            m2.metric("접수완료", f"{int((df_f.get('상태') == '접수완료').sum()) if '상태' in df_f.columns else 0} 건")
-            m3.metric("처리완료", f"{int((df_f.get('상태') == '완료').sum()) if '상태' in df_f.columns else 0} 건")
-            st.write("")
-
-            st.markdown(f"**검색 결과: {len(df_view)}건**")
+            st.markdown(f"**검색 결과: `{len(df_view)}건`**")
 
             photo_col = "현장사진" if "현장사진" in df_view.columns else ("사진" if "사진" in df_view.columns else None)
             has_memo_col = "처리메모" in df_view.columns
@@ -1465,13 +1701,13 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
                         )
 
                         card_html = f"""
-                            <div class="req-card">
+                            <div class="req-card req-card-{html.escape(r_status)}">
                                 <div class="req-card-header">
-                                    <div><span style="font-size: 0.85rem; color: #64748b;">🗓️ {r_dt}</span></div>
+                                    <div><span style="font-size: 0.84rem; color: #64748b;">🗓️ {r_dt}</span></div>
                                     <div>{status_badge(r_status)}</div>
                                 </div>
                                 <div class="req-card-meta">
-                                    📍 <b>위치:</b> {r_space} > {r_det} &nbsp;|&nbsp; 🏷️ <b>분류:</b> {r_cat} &nbsp;|&nbsp; 👤 <b>작성자:</b> {r_user}
+                                    📍 <b>위치:</b> {r_space} &rsaquo; {r_det} &nbsp;|&nbsp; 🏷️ <b>분류:</b> {r_cat} &nbsp;|&nbsp; 👤 <b>작성자:</b> {r_user}
                                 </div>
                                 <div class="req-card-body">{r_desc}</div>
                                 {memo_html}
@@ -1482,7 +1718,7 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
             else:
                 if is_full_admin and "상태" in df_view.columns:
                     st.info("💡 **관리자 안내**: 표 안의 '상태' 또는 '처리메모' 셀을 더블 클릭하여 수정한 뒤, 아래 저장 버튼을 누르세요.")
-                    
+
                     editor_cols = list(df_view.columns)
                     editable_cols = ["상태"]
                     if has_memo_col:
@@ -1562,14 +1798,6 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
 # 4. 재고 관리 (물품/비품 재고 관리)
 # ==========================================
 elif menu == "📦 물품/비품 재고 관리":
-    st.title("📦 재고 통합 관리")
-
-    if is_full_admin:
-        tab1, tab2, tab3 = st.tabs(["📝 마감 실사 등록", "📥 입·출고 내역 등록", "📊 재고 대시보드"])
-    else:
-        st.info("🔒 **조교 계정**은 '마감 실사 등록'과 '재고 대시보드' 조회가 가능합니다. 입/출고 등록은 교무팀 계정을 이용해 주세요.")
-        tab1, tab3 = st.tabs(["📝 마감 실사 등록", "📊 재고 대시보드"])
-
     def get_safe_inventory_df():
         try:
             records = get_inventory_records()
@@ -1578,7 +1806,6 @@ elif menu == "📦 물품/비품 재고 관리":
             all_cols = ["일시", "구분", "작성자"] + ALL_SHEET_ITEMS + ["비고"]
             return pd.DataFrame(columns=all_cols)
 
-    # 실시간 전산 재고 정확 계산 함수 (가장 최근 일시 '실사' 행 + 이후 입출고 누적 가감)
     def get_current_calculated_stock():
         df_i = get_safe_inventory_df()
         current_stock = {item: 0.0 for item in ALL_SHEET_ITEMS}
@@ -1619,17 +1846,39 @@ elif menu == "📦 물품/비품 재고 관리":
 
         return current_stock, last_silsa_date, has_silsa_base
 
+    calc_stock, last_silsa_date, has_silsa = get_current_calculated_stock()
+
+    low_count_preview = 0
+    for item in CONSUMABLES:
+        tot_p = calc_stock.get(f"{item} (2층)", 0.0) + calc_stock.get(f"{item} (6층)", 0.0) + calc_stock.get(f"{item} (7층)", 0.0)
+        if tot_p <= get_threshold(item):
+            low_count_preview += 1
+    for item in EQUIPMENT:
+        if calc_stock.get(item, 0.0) <= get_threshold(item):
+            low_count_preview += 1
+
+    stock_pill = f"🚨 발주필요 {low_count_preview}건" if low_count_preview > 0 else "✅ 전 품목 정상"
+    render_hero(
+        "📦 물품/비품 재고 통합 관리",
+        "전산 재고와 연동된 일일 마감 실사, 일괄 입·출고 등록, 층별 재고 현황을 한눈에 확인하세요.",
+        [f"🗓️ 최근 실사: {last_silsa_date}", stock_pill]
+    )
+
+    if is_full_admin:
+        tab1, tab2, tab3 = st.tabs(["📝 마감 실사 등록", "📥 입·출고 내역 등록", "📊 재고 대시보드"])
+    else:
+        st.info("🔒 **조교 계정**은 '마감 실사 등록'과 '재고 대시보드' 조회가 가능합니다. 입/출고 등록은 교무팀 계정을 이용해 주세요.")
+        tab1, tab3 = st.tabs(["📝 마감 실사 등록", "📊 재고 대시보드"])
+
     # 탭 1: 마감 재고 실사
     with tab1:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
         st.markdown("### 일일 마감 실사 등록")
-        st.caption("※ 층별 실제 창고 수량을 입력하세요. 전산 재고와 비교할 수 있으며 총수량은 자동 합산됩니다.")
+        st.caption("※ 기본값은 낮 동안의 입·출고가 반영된 '현재 실시간 전산 재고'입니다. 실제 창고 수량과 다를 경우 해당 셀을 수정해 주세요.")
         now_str = get_kst_now()
-        
+
         st.markdown(f"**작성 정보** &nbsp;|&nbsp; 🗓️ {now_str} &nbsp;|&nbsp; 👤 {html.escape(st.session_state['user_name'])} ({html.escape(st.session_state['user_role'])})")
         st.write("")
-        
-        calc_stock, last_silsa_date, has_silsa = get_current_calculated_stock()
 
         def safe_float(val):
             try:
@@ -1645,7 +1894,7 @@ elif menu == "📦 물품/비품 재고 관리":
             v6 = safe_float(calc_stock.get(f"{item} (6층)", 0.0))
             v7 = safe_float(calc_stock.get(f"{item} (7층)", 0.0))
             comp_total = v2 + v6 + v7
-            
+
             consumable_rows.append({
                 "소모품 명": item,
                 "전산재고 (합계)": round(comp_total, 2),
@@ -1658,7 +1907,6 @@ elif menu == "📦 물품/비품 재고 관리":
         df_c_input = pd.DataFrame(consumable_rows)
 
         st.markdown("#### 🧻 층별 소모품 실사")
-        st.caption("💡 각 층의 수량을 수정하면 '총 실사 수량'이 자동 계산되며, 좌측 '전산재고'와 오차를 비교할 수 있습니다.")
         edited_c = st.data_editor(
             df_c_input,
             use_container_width=True,
@@ -1706,6 +1954,29 @@ elif menu == "📦 물품/비품 재고 관리":
             },
             key="e_silsa_editor"
         )
+
+        # 실시간 오차 및 부족 품목 미리보기
+        diff_notes = []
+        preview_low = []
+        for _, r in edited_c.iterrows():
+            comp_v = float(r["전산재고 (합계)"])
+            real_v = float(r["총 실사 수량"])
+            if abs(real_v - comp_v) > 1e-6:
+                diff_notes.append(f"{r['소모품 명']} ({comp_v:.2f}→{real_v:.2f})")
+            if real_v <= get_threshold(r["소모품 명"]):
+                preview_low.append(r["소모품 명"])
+        for _, r in edited_e.iterrows():
+            comp_v = float(r["전산 수량"])
+            real_v = float(r["현재 수량"])
+            if abs(real_v - comp_v) > 1e-6:
+                diff_notes.append(f"{r['비품 품목명']} ({comp_v:.2f}→{real_v:.2f})")
+            if real_v <= get_threshold(r["비품 품목명"]):
+                preview_low.append(r["비품 품목명"])
+
+        if diff_notes:
+            st.info(f"✏️ **전산 대비 수량 조정 ({len(diff_notes)}건)**: " + ", ".join(diff_notes[:8]) + (" ..." if len(diff_notes) > 8 else ""))
+        if preview_low:
+            st.warning(f"⚠️ **저장 시 두레이 발주 알림 예정 ({len(preview_low)}건)**: " + ", ".join(preview_low))
 
         st.write("")
         if st.button("📝 마감 실사 데이터 저장하기", use_container_width=True):
@@ -1819,33 +2090,36 @@ elif menu == "📦 물품/비품 재고 관리":
                 key="inout_e_editor"
             )
 
+            preview_changes = {}
+            for _, r in edited_inout_c.iterrows():
+                item = r["소모품 명"]
+                v2 = float(r["2층 변동수량"]) if pd.notna(r["2층 변동수량"]) else 0.0
+                v6 = float(r["6층 변동수량"]) if pd.notna(r["6층 변동수량"]) else 0.0
+                v7 = float(r["7층 변동수량"]) if pd.notna(r["7층 변동수량"]) else 0.0
+                if v2 > 0: preview_changes[f"{item} (2층)"] = v2
+                if v6 > 0: preview_changes[f"{item} (6층)"] = v6
+                if v7 > 0: preview_changes[f"{item} (7층)"] = v7
+            for _, r in edited_inout_e.iterrows():
+                item = r["비품 품목명"]
+                ve = float(r["변동수량"]) if pd.notna(r["변동수량"]) else 0.0
+                if ve > 0: preview_changes[item] = ve
+
+            if preview_changes:
+                sign = "+" if is_in else "-"
+                summary_txt = ", ".join([f"{k} ({sign}{v:.2f})" for k, v in list(preview_changes.items())[:8]])
+                st.info(f"📦 **현재 입력된 {action_label} 품목 ({len(preview_changes)}건)**: {summary_txt}" + (" ..." if len(preview_changes) > 8 else ""))
+
             st.write("")
             btn_label = f"일괄 {action_label} 내역 등록하기"
             if st.button(btn_label, use_container_width=True):
-                changes_dict = {}
-
-                for _, r in edited_inout_c.iterrows():
-                    item = r["소모품 명"]
-                    v2 = float(r["2층 변동수량"]) if pd.notna(r["2층 변동수량"]) else 0.0
-                    v6 = float(r["6층 변동수량"]) if pd.notna(r["6층 변동수량"]) else 0.0
-                    v7 = float(r["7층 변동수량"]) if pd.notna(r["7층 변동수량"]) else 0.0
-                    if v2 > 0: changes_dict[f"{item} (2층)"] = v2
-                    if v6 > 0: changes_dict[f"{item} (6층)"] = v6
-                    if v7 > 0: changes_dict[f"{item} (7층)"] = v7
-
-                for _, r in edited_inout_e.iterrows():
-                    item = r["비품 품목명"]
-                    ve = float(r["변동수량"]) if pd.notna(r["변동수량"]) else 0.0
-                    if ve > 0: changes_dict[item] = ve
-
-                if not changes_dict:
+                if not preview_changes:
                     st.warning("⚠️ 입력된 변동 수량이 없습니다. 0보다 큰 수량을 하나 이상 입력해 주세요.")
                 else:
                     now_str = get_kst_now()
                     row_data = [now_str, action_label, st.session_state['user_name']]
                     for item in ALL_SHEET_ITEMS:
-                        if item in changes_dict:
-                            qty_val = changes_dict[item]
+                        if item in preview_changes:
+                            qty_val = preview_changes[item]
                             row_data.append(qty_val if is_in else -qty_val)
                         else:
                             row_data.append(0.0)
@@ -1854,7 +2128,7 @@ elif menu == "📦 물품/비품 재고 관리":
                     with st.spinner("내역을 기록하고 있습니다..."):
                         call_with_retry(lambda: ws_inventory.append_row(row_data))
                         refresh_sheet_now("inventory")
-                    st.success(f"🎉 총 {len(changes_dict)}개 품목의 {action_label} 처리가 성공적으로 등록되었습니다!")
+                    st.success(f"🎉 총 {len(preview_changes)}개 품목의 {action_label} 처리가 성공적으로 등록되었습니다!")
                     st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1866,14 +2140,6 @@ elif menu == "📦 물품/비품 재고 관리":
             if df_i.empty:
                 st.info("아직 등록된 재고 데이터가 없습니다.")
             else:
-                calc_stock, last_silsa_date, has_silsa = get_current_calculated_stock()
-
-                st.markdown("### 📊 실시간 재고 대시보드")
-                if has_silsa:
-                    st.caption(f"💡 가장 최근 실사일(**{last_silsa_date}**)을 기준으로 이후의 입/출고 내역이 자동 계산된 현재 보유 수량입니다.")
-                else:
-                    st.warning("⚠️ 등록된 '마감 실사' 데이터의 기준점이 없습니다. 전체 이력을 기준으로 단순 합산 표시 중입니다.")
-
                 consumable_totals = {}
                 floor_comparison_data = []
 
@@ -1882,13 +2148,16 @@ elif menu == "📦 물품/비품 재고 관리":
                     q6 = calc_stock.get(f"{item} (6층)", 0.0)
                     q7 = calc_stock.get(f"{item} (7층)", 0.0)
                     total_q = q2 + q6 + q7
+                    th = get_threshold(item)
                     consumable_totals[item] = total_q
                     floor_comparison_data.append({
                         "소모품명": item,
                         "2층 재고": round(q2, 2),
                         "6층 재고": round(q6, 2),
                         "7층 재고": round(q7, 2),
-                        "총 합계": round(total_q, 2)
+                        "총 합계": round(total_q, 2),
+                        "최소 기준": th,
+                        "상태": "🚨 발주필요" if total_q <= th else "✅ 정상"
                     })
 
                 order_needed_list = []
@@ -1918,6 +2187,16 @@ elif menu == "📦 물품/비품 재고 관리":
 
                 df_order_needed = pd.DataFrame(order_needed_list)
 
+                render_kpi_cards([
+                    {"label": "소모품 종류", "value": f"{len(CONSUMABLES)}종", "color": "blue"},
+                    {"label": "비품 종류", "value": f"{len(EQUIPMENT)}종", "color": "slate"},
+                    {"label": "🚨 발주 필요 품목", "value": f"{len(df_order_needed)}건", "color": "red" if len(df_order_needed) > 0 else "green"},
+                    {"label": "최근 실사 기준", "value": last_silsa_date.split(" ")[0] if last_silsa_date != "없음" else "없음", "sub": last_silsa_date if last_silsa_date != "없음" else "실사 미등록", "color": "amber"},
+                ])
+
+                if not has_silsa:
+                    st.warning("⚠️ 등록된 '마감 실사' 데이터의 기준점이 없습니다. 전체 이력을 기준으로 단순 합산 표시 중입니다.")
+
                 if not df_order_needed.empty:
                     pills = "".join([
                         f'<span class="low-stock-pill">{html.escape(str(r["품목명"]))} (보유: {r["현재 보유량"]:.2f})</span>'
@@ -1939,19 +2218,43 @@ elif menu == "📦 물품/비품 재고 관리":
 
                 st.write("")
                 st.markdown("#### 🏢 층별 소모품 재고 현황 (2층 / 6층 / 7층 비교)")
+                dash_item_filter = st.text_input("🔍 품목명 빠른 검색", placeholder="소모품 또는 비품 이름을 입력하세요 (예: A4, 생수, 노트북)", key="dash_item_search")
+
                 df_floor_comp = pd.DataFrame(floor_comparison_data)
+                if dash_item_filter:
+                    df_floor_comp = df_floor_comp[df_floor_comp["소모품명"].str.contains(dash_item_filter, case=False, na=False)]
                 st.dataframe(df_floor_comp, use_container_width=True, hide_index=True)
 
                 st.write("")
                 col1, col2 = st.columns(2, gap="large")
                 with col1:
                     st.markdown("#### 📄 소모품 총 재고 (전체 합계)")
-                    df_c_stock = pd.DataFrame([{"품목명": k, "현재 보유량": round(v, 2)} for k, v in consumable_totals.items()])
+                    df_c_stock = pd.DataFrame([
+                        {
+                            "품목명": k,
+                            "현재 보유량": round(v, 2),
+                            "기준치": get_threshold(k),
+                            "상태": "🚨 부족" if v <= get_threshold(k) else "✅ 정상"
+                        }
+                        for k, v in consumable_totals.items()
+                    ])
+                    if dash_item_filter:
+                        df_c_stock = df_c_stock[df_c_stock["품목명"].str.contains(dash_item_filter, case=False, na=False)]
                     st.dataframe(df_c_stock, use_container_width=True, hide_index=True)
 
                 with col2:
                     st.markdown("#### 💻 비품/기기 현재 재고")
-                    df_e_stock = pd.DataFrame([{"품목명": k, "현재 보유량": round(calc_stock.get(k, 0.0), 2)} for k in EQUIPMENT])
+                    df_e_stock = pd.DataFrame([
+                        {
+                            "품목명": k,
+                            "현재 보유량": round(calc_stock.get(k, 0.0), 2),
+                            "기준치": get_threshold(k),
+                            "상태": "🚨 부족" if calc_stock.get(k, 0.0) <= get_threshold(k) else "✅ 정상"
+                        }
+                        for k in EQUIPMENT
+                    ])
+                    if dash_item_filter:
+                        df_e_stock = df_e_stock[df_e_stock["품목명"].str.contains(dash_item_filter, case=False, na=False)]
                     st.dataframe(df_e_stock, use_container_width=True, hide_index=True)
 
                 st.markdown("---")
@@ -1977,7 +2280,7 @@ elif menu == "📦 물품/비품 재고 관리":
 
                 st.write("")
                 st.dataframe(df_hist, use_container_width=True, hide_index=True)
-                
+
                 st.write("")
                 st.download_button(
                     "⬇️ 조회된 이력 CSV 다운로드",
@@ -1991,12 +2294,26 @@ elif menu == "📦 물품/비품 재고 관리":
 # 5. 사용자 권한 관리 (교무팀 전용)
 # ==========================================
 elif menu == "👥 사용자 권한 관리" and is_full_admin:
-    st.title("👥 사용자 계정 및 권한 관리")
-    st.caption("교무팀 관리자 전용 메뉴입니다. 가입된 직원의 권한 분류를 변경하거나 퇴사/비인가 계정을 비활성화할 수 있습니다.")
+    render_hero(
+        "👥 사용자 권한 및 알림 관리",
+        "가입 직원의 직책 권한 관리, 비활성 계정 차단 및 두레이 웹훅 연동 상태를 점검하세요.",
+        [f"🔑 교무팀 관리자: {st.session_state['user_name']}", f"📌 {APP_VERSION}"]
+    )
 
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
     u_records, u_row_nums = get_users_records_with_rows()
     df_users_raw = pd.DataFrame(u_records)
+
+    if not df_users_raw.empty and "분류" in df_users_raw.columns:
+        roles_ser = df_users_raw["분류"].astype(str).str.strip()
+        render_kpi_cards([
+            {"label": "전체 가입자", "value": f"{len(df_users_raw)}명", "color": "slate"},
+            {"label": "교무팀", "value": f"{int((roles_ser == '교무팀').sum())}명", "color": "blue"},
+            {"label": "조교", "value": f"{int((roles_ser == '조교').sum())}명", "color": "amber"},
+            {"label": "직원·강사", "value": f"{int(roles_ser.isin(['직원', '강사']).sum())}명", "color": "green"},
+            {"label": "비활성 차단", "value": f"{int((roles_ser == '비활성').sum())}명", "color": "red"},
+        ])
+
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
     if df_users_raw.empty:
         st.info("등록된 사용자 정보가 없습니다.")
@@ -2004,6 +2321,12 @@ elif menu == "👥 사용자 권한 관리" and is_full_admin:
         u_sheet_row_map = {idx: u_row_nums[idx] for idx in range(len(u_row_nums))}
         st.markdown("### 📋 가입자 목록 및 권한 설정")
         st.info("💡 **안내**: '분류' 열을 더블 클릭하여 직책을 변경할 수 있습니다. `비활성`으로 변경된 계정은 즉시 시스템 로그인 및 자동 로그인이 차단됩니다.")
+
+        user_search = st.text_input("🔍 이름 또는 전화번호 검색", placeholder="찾으시는 사용자 이름이나 연락처 일부를 입력하세요", key="user_mgmt_search")
+        df_users_view = df_users_raw.copy()
+        if user_search:
+            u_mask = df_users_view.astype(str).apply(lambda r: r.str.contains(user_search, case=False, na=False)).any(axis=1)
+            df_users_view = df_users_view[u_mask]
 
         user_cols = list(df_users_raw.columns)
         has_role_col = "분류" in user_cols
@@ -2014,7 +2337,7 @@ elif menu == "👥 사용자 권한 관리" and is_full_admin:
 
             disabled_cols = [c for c in user_cols if c != "분류"]
             edited_users = st.data_editor(
-                df_users_raw,
+                df_users_view,
                 use_container_width=True,
                 hide_index=True,
                 disabled=disabled_cols,
@@ -2054,7 +2377,7 @@ elif menu == "👥 사용자 권한 관리" and is_full_admin:
                     st.warning("변경된 내용이 없습니다.")
         else:
             st.warning("users 시트에 '분류' 컬럼이 존재하지 않습니다.")
-            st.dataframe(df_users_raw, use_container_width=True)
+            st.dataframe(df_users_view, use_container_width=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
