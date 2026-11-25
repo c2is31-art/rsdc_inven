@@ -1,22 +1,70 @@
-import streamlit as st
-import pandas as pd
+import html
+import hashlib
+import io
 import re
+import time
 import uuid
-from datetime import datetime, timezone, timedelta
+from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
+
 import gspread
+import pandas as pd
+import requests
+import streamlit as st
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-import io
-import time
-import extra_streamlit_components as stx
+from gspread.utils import absolute_range_name, numericise_all
+
+try:
+    import extra_streamlit_components as stx
+except ImportError:
+    stx = None
+
+# ==========================================
+# 0. 페이지 기본 설정 (가장 먼저 호출)
+# ==========================================
+st.set_page_config(
+    page_title="러셀대치학원 시설보수 및 재고관리 시스템",
+    page_icon="🏢",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # 자동 번역으로 인한 글자 깨짐 방지
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
+# ==========================================
+# 앱 버전 및 업데이트 이력 정의
+# ==========================================
+APP_VERSION = "v2.2.0"
+LAST_UPDATED = "2026-11-25"
+UPDATE_HISTORY = [
+    {
+        "version": "v2.2.0",
+        "date": "2026.11.25",
+        "changes": [
+            "구글 시트 API 429 할당량 초과 오류 해결 (워크시트 리소스 캐시, batchGet 단일 일괄 조회, 지수 백오프 재시도, 장애 시 캐시 유지 폴백)",
+            "전화번호 앞자리 '0' 누락 방지 및 private_key_id 기반 해시 토큰 솔트 정상 적용",
+            "쿠키 삭제 예외 방어, 수동 새로고침 버튼 추가 및 모바일 카드 HTML 안전 이스케이프",
+            "로그인 화면·사이드바·장애 안내 화면 전체에 버전 및 업데이트 내용 상시 표기",
+        ],
+    },
+    {
+        "version": "v2.1.0",
+        "date": "2026.11.25",
+        "changes": [
+            "학원 공용/관리자 가입 코드 검증, 중복 가입 방지, SHA-256 해시 토큰 자동 로그인",
+            "교무팀 전용 사용자 권한 관리 UI (비활성 차단) 및 조교 재고 대시보드 열람 허용",
+            "실시간 전산재고 연동 마감 실사, 일괄 입·출고 등록, 층별 재고 비교, 발주 필요 목록 CSV",
+            "시설보수 중복 신고 알림, 처리메모 편집, 사진 링크, QR 자동 선택, 모바일 카드 뷰, 두레이 알림 연동",
+        ],
+    },
+]
+
 
 # ==========================================
-# 🇰🇷 한국 표준시(KST) 구하기 함수
+# 🇰🇷 한국 표준시(KST) 및 공통 유틸리티
 # ==========================================
 def get_kst_now():
     kst = timezone(timedelta(hours=9))
@@ -36,20 +84,113 @@ def col_letter(n):
     return letters
 
 
-# ==========================================
-# 0. 페이지 기본 설정 및 쿠키 매니저 초기화
-# ==========================================
-st.set_page_config(
-    page_title="러셀대치학원 시설보수 및 재고관리 시스템",
-    page_icon="🏢",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+def clean_phone(phone_str):
+    if pd.isna(phone_str) or phone_str is None:
+        return ""
+    return re.sub(r"[^0-9]", "", str(phone_str))
 
+
+def canonical_phone(phone_str):
+    c = clean_phone(phone_str)
+    if not c:
+        return ""
+    if not c.startswith("0") and len(c) in (9, 10) and c[0] in ("1", "2", "3", "4", "5", "6", "7"):
+        return "0" + c
+    return c
+
+
+def phone_variants(phone_str):
+    c = clean_phone(phone_str)
+    if not c:
+        return set()
+    variants = {c, canonical_phone(c)}
+    if c.startswith("0") and len(c) in (10, 11):
+        variants.add(c[1:])
+    return variants
+
+
+def get_secret(key, default=None):
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+        return default
+    except Exception:
+        return default
+
+
+# ==========================================
+# 🔔 두레이(Dooray) 웹훅 알림 헬퍼 함수
+# ==========================================
+def send_dooray_alert(message: str):
+    webhook_url = get_secret("dooray_webhook_url", "")
+    if not webhook_url:
+        return
+    try:
+        payload = {
+            "botName": "러셀대치 통합관리 시스템",
+            "botIconImage": "https://static.dooray.com/static_market/images/dooray-bot-profile.png",
+            "text": message
+        }
+        requests.post(webhook_url, json=payload, timeout=5)
+    except Exception:
+        pass
+
+
+# ==========================================
+# 🔒 보안 인증 솔트 및 해시 토큰 생성
+# ==========================================
+def get_secret_salt():
+    creds = get_secret("gcp_service_account", {})
+    if isinstance(creds, Mapping) and "private_key_id" in creds:
+        return str(creds["private_key_id"])
+    return str(get_secret("auth_salt", "russel_secret_salt_2026"))
+
+
+def generate_auth_token(phone: str) -> str:
+    canon_p = canonical_phone(phone)
+    salt = get_secret_salt()
+    return hashlib.sha256(f"{canon_p}:{salt}".encode("utf-8")).hexdigest()
+
+
+# ==========================================
+# 🍪 쿠키 매니저 초기화 (절대 @st.cache_resource 미사용)
+# ==========================================
 def get_cookie_manager():
+    if stx is None:
+        return None
     return stx.CookieManager(key="cookie_manager")
 
+
 cookie_manager = get_cookie_manager()
+
+
+def safe_get_cookie(name: str):
+    if cookie_manager is None:
+        return None
+    try:
+        return cookie_manager.get(cookie=name)
+    except Exception:
+        return None
+
+
+def safe_set_cookie(name: str, value: str, days: int = 30):
+    if cookie_manager is None:
+        return
+    try:
+        cookie_manager.set(name, value, expires_at=datetime.now() + timedelta(days=days))
+    except Exception:
+        pass
+
+
+def safe_delete_cookie(name: str):
+    if cookie_manager is None:
+        return
+    try:
+        if cookie_manager.get(cookie=name) is not None:
+            cookie_manager.delete(name)
+    except Exception:
+        pass
+
 
 # ==========================================
 # Custom CSS (디자인 및 시각성 개선)
@@ -61,7 +202,7 @@ st.markdown("""
     /* 글로벌 폰트 및 배경 설정 */
     html, body, [class*="css"], .stApp {
         font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif !important;
-        background-color: #F4F7FB !important; /* 약간 더 밝고 시원한 배경색 */
+        background-color: #F4F7FB !important;
         color: #1e293b !important;
         font-size: 15.5px;
         line-height: 1.6;
@@ -72,18 +213,18 @@ st.markdown("""
 
     .block-container {
         padding-top: 1.8rem !important;
-        max-width: 1280px; /* 가로폭 조금 더 넓게 */
+        max-width: 1280px;
     }
 
     /* 사이드바 스타일 개선 */
     [data-testid="stSidebar"] {
-        background-color: #111827 !important; /* 조금 더 다크한 네이비 */
+        background-color: #111827 !important;
         border-right: 1px solid #1f2937;
     }
     [data-testid="stSidebar"] * {
         color: #f3f4f6 !important;
     }
-    [data-testid="stSidebar"] hr { border-color: #374151 !important; margin: 1.5rem 0; }
+    [data-testid="stSidebar"] hr { border-color: #374151 !important; margin: 1.2rem 0; }
 
     /* 사이드바 라디오 버튼 */
     [data-testid="stSidebar"] [data-testid="stRadio"] label p {
@@ -102,7 +243,7 @@ st.markdown("""
         background-color: #1f2937 !important;
     }
     [data-testid="stSidebar"] [data-testid="stRadio"] div[role="radiogroup"] > label[aria-checked="true"] {
-        background-color: #2563eb !important; /* 선택된 메뉴 파란색 강조 */
+        background-color: #2563eb !important;
     }
 
     /* 🔥 본문 메인 영역 라디오 버튼 (알약 형태) */
@@ -116,7 +257,7 @@ st.markdown("""
         background-color: #ffffff !important;
         border: 1px solid #e2e8f0 !important;
         padding: 8px 16px !important;
-        border-radius: 99px !important; /* 완전한 둥근 알약형 */
+        border-radius: 99px !important;
         margin-right: 8px !important;
         box-shadow: 0 1px 2px rgba(0,0,0,0.03);
         transition: all 0.2s ease;
@@ -138,7 +279,7 @@ st.markdown("""
         background: linear-gradient(135deg, #1e3a8a, #3b82f6);
         border-radius: 12px;
         padding: 16px;
-        margin-bottom: 20px;
+        margin-bottom: 16px;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
     }
     .user-card .u-name { font-size: 1.1rem; font-weight: 700; color: white !important;}
@@ -151,12 +292,6 @@ st.markdown("""
         padding: 3px 10px;
         border-radius: 999px;
         color: white !important;
-    }
-    .clock-box {
-        font-size: 0.85rem;
-        color: #9ca3af !important;
-        margin-bottom: 12px;
-        font-weight: 500;
     }
 
     /* 타이포그래피 */
@@ -251,7 +386,7 @@ st.markdown("""
     .brand-panel {
         background: linear-gradient(135deg, #0f172a, #1e3a8a);
         border-radius: 16px;
-        padding: 40px;
+        padding: 36px;
         height: 100%;
         color: #fff !important;
         box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
@@ -274,6 +409,68 @@ st.markdown("""
     .scroll-table td { padding: 12px 16px; border-bottom: 1px solid #e2e8f0; font-size: 0.85rem; color: #334155; }
     .scroll-table tr:hover { background-color: #f1f5f9; }
 
+    /* 모바일 시설 요청 카드 스타일 */
+    .req-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 18px 20px;
+        margin-bottom: 16px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.03);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .req-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.06);
+    }
+    .req-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #f1f5f9;
+        padding-bottom: 8px;
+        margin-bottom: 10px;
+    }
+    .req-card-meta {
+        font-size: 0.85rem;
+        color: #64748b;
+        margin-bottom: 8px;
+        line-height: 1.5;
+    }
+    .req-card-body {
+        font-size: 0.95rem;
+        color: #1e293b;
+        white-space: pre-line;
+        background: #f8fafc;
+        padding: 12px;
+        border-radius: 8px;
+        margin-bottom: 8px;
+        border: 1px solid #f1f5f9;
+    }
+    .req-card-memo {
+        font-size: 0.85rem;
+        color: #0369a1;
+        background: #e0f2fe;
+        border: 1px solid #bae6fd;
+        padding: 8px 12px;
+        border-radius: 6px;
+        margin-bottom: 8px;
+    }
+    .req-photo-link {
+        display: inline-block;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: #2563eb !important;
+        text-decoration: none;
+        padding: 4px 10px;
+        border: 1px solid #bfdbfe;
+        border-radius: 6px;
+        background-color: #eff6ff;
+    }
+    .req-photo-link:hover {
+        background-color: #dbeafe;
+    }
+
     /* 메트릭 박스 */
     [data-testid="stMetric"] {
         background-color: white;
@@ -294,9 +491,32 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+
 # ==========================================
-# 구글 API 연동
+# 구글 API 연동 및 할당량(429) 방어 캐시 계층
 # ==========================================
+def is_quota_or_transient_error(err: Exception) -> bool:
+    s = str(err)
+    return any(
+        tok in s
+        for tok in ("429", "Quota exceeded", "Rate Limit", "500", "502", "503", "504", "timed out", "ConnectionReset")
+    )
+
+
+def call_with_retry(fn, max_retries: int = 3, base_delay: float = 1.0):
+    last_err = None
+    for attempt in range(max_retries + 1):
+        try:
+            return fn()
+        except Exception as e:
+            last_err = e
+            if is_quota_or_transient_error(e) and attempt < max_retries:
+                time.sleep(base_delay * (2 ** attempt))
+                continue
+            raise
+    raise last_err
+
+
 @st.cache_resource
 def get_google_services():
     scopes = [
@@ -305,8 +525,7 @@ def get_google_services():
     ]
     creds_dict = dict(st.secrets["gcp_service_account"])
     if "private_key" in creds_dict:
-        pk = str(creds_dict["private_key"])
-        pk = pk.replace("\\n", "\n")
+        pk = str(creds_dict["private_key"]).replace("\\n", "\n")
         creds_dict["private_key"] = pk
 
     credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
@@ -314,76 +533,254 @@ def get_google_services():
     drive_service = build('drive', 'v3', credentials=credentials)
     return gc, drive_service
 
-try:
-    with st.spinner("시스템 연결 중..."):
-        gc, drive_service = get_google_services()
-        sh = gc.open("러셀대치_통합DB")
-        ws_users = sh.worksheet("users")
-        ws_facility = sh.worksheet("facility")
-        ws_inventory = sh.worksheet("inventory")
-except Exception as e:
-    st.error(f"⚠️️ 구글 시트 및 드라이브 연동에 실패했습니다: {e}")
+
+@st.cache_resource(ttl=3600, show_spinner=False)
+def get_spreadsheet_bundle():
+    """스프레드시트 및 워크시트 메타데이터를 1시간 동안 1회만 조회하여 429 할당량 소모 차단"""
+    gc, drive_service = get_google_services()
+    sh = call_with_retry(lambda: gc.open("러셀대치_통합DB"), max_retries=3, base_delay=1.2)
+    all_ws = call_with_retry(lambda: sh.worksheets(), max_retries=3, base_delay=1.2)
+    ws_map = {ws.title: ws for ws in all_ws}
+
+    ws_users = ws_map.get("users")
+    ws_facility = ws_map.get("facility")
+    ws_inventory = ws_map.get("inventory")
+    ws_config = ws_map.get("config")
+
+    if not ws_users or not ws_facility or not ws_inventory:
+        missing = [k for k, v in [("users", ws_users), ("facility", ws_facility), ("inventory", ws_inventory)] if not v]
+        raise RuntimeError(f"필수 워크시트를 찾을 수 없습니다: {', '.join(missing)}")
+
+    return {
+        "gc": gc,
+        "drive_service": drive_service,
+        "sh": sh,
+        "ws_users": ws_users,
+        "ws_facility": ws_facility,
+        "ws_inventory": ws_inventory,
+        "ws_config": ws_config,
+    }
+
+
+@st.cache_resource
+def _get_sheet_store():
+    """모든 세션이 공유하는 메모리 캐시 + 장애 시 Stale 데이터 폴백 저장소"""
+    return {
+        "users": {"records": None, "header": [], "row_nums": [], "ts": 0.0, "ttl": 180},
+        "facility": {"records": None, "header": [], "row_nums": [], "ts": 0.0, "ttl": 60},
+        "inventory": {"records": None, "header": [], "row_nums": [], "ts": 0.0, "ttl": 60},
+        "config": {"records": None, "header": [], "row_nums": [], "ts": 0.0, "ttl": 600},
+        "using_stale": False,
+        "last_error": "",
+    }
+
+
+def _parse_sheet_matrix(values, numericise=False):
+    if not values or values == [[]]:
+        return [], [], []
+    raw_header = [str(h).strip() for h in values[0]]
+    while raw_header and raw_header[-1] == "":
+        raw_header.pop()
+    if not raw_header:
+        return [], [], []
+
+    num_cols = len(raw_header)
+    seen = {}
+    header = []
+    for idx, h in enumerate(raw_header):
+        key = h if h else f"col_{idx + 1}"
+        if key in seen:
+            seen[key] += 1
+            key = f"{key}_{seen[key]}"
+        else:
+            seen[key] = 0
+        header.append(key)
+
+    records = []
+    row_nums = []
+    for sheet_row_idx, raw_row in enumerate(values[1:], start=2):
+        padded = list(raw_row[:num_cols]) + [""] * max(0, num_cols - len(raw_row))
+        if all(str(cell).strip() == "" for cell in padded):
+            continue
+        if numericise:
+            padded = numericise_all(padded, empty2zero=False, default_blank="")
+        records.append(dict(zip(header, padded)))
+        row_nums.append(sheet_row_idx)
+
+    return header, records, row_nums
+
+
+def invalidate_sheet(name: str):
+    store = _get_sheet_store()
+    if name in store:
+        store[name]["ts"] = 0.0
+
+
+def invalidate_all_sheets():
+    store = _get_sheet_store()
+    for name in ("users", "facility", "inventory", "config"):
+        store[name]["ts"] = 0.0
+
+
+def sync_sheets(bundle, sheet_names=None, force: bool = False) -> bool:
+    """
+    만료된 시트만 선별하여 복수 시트일 경우 values_batch_get 단일 API 호출로 일괄 동기화합니다.
+    429 등 일시 장애 시 기존 캐시 데이터를 유지하여 접속 불능(st.stop)을 방지합니다.
+    """
+    store = _get_sheet_store()
+    now = time.time()
+    all_names = ["users", "facility", "inventory"]
+    if bundle.get("ws_config") is not None:
+        all_names.append("config")
+    elif store["config"]["records"] is None:
+        store["config"]["records"] = []
+        store["config"]["ts"] = now
+
+    targets = sheet_names if sheet_names is not None else all_names
+    targets = [n for n in targets if n in all_names]
+
+    if force:
+        stale = list(targets)
+    else:
+        stale = [
+            n for n in targets
+            if store[n]["records"] is None or (now - store[n]["ts"]) >= store[n]["ttl"]
+        ]
+
+    if not stale:
+        return True
+
+    sh = bundle["sh"]
+    try:
+        if len(stale) > 1:
+            ranges = [absolute_range_name(n) for n in stale]
+            resp = call_with_retry(lambda: sh.values_batch_get(ranges), max_retries=2, base_delay=1.0)
+            value_ranges = resp.get("valueRanges", [])
+            for idx, name in enumerate(stale):
+                vr = value_ranges[idx] if idx < len(value_ranges) else {}
+                values = vr.get("values", [[]])
+                header, recs, row_nums = _parse_sheet_matrix(values, numericise=(name == "inventory"))
+                store[name]["header"] = header
+                store[name]["records"] = recs
+                store[name]["row_nums"] = row_nums
+                store[name]["ts"] = now
+        else:
+            name = stale[0]
+            ws = bundle.get(f"ws_{name}")
+            if ws is not None:
+                values = call_with_retry(lambda: ws.get_all_values(), max_retries=2, base_delay=1.0)
+                header, recs, row_nums = _parse_sheet_matrix(values, numericise=(name == "inventory"))
+                store[name]["header"] = header
+                store[name]["records"] = recs
+                store[name]["row_nums"] = row_nums
+                store[name]["ts"] = now
+
+        store["using_stale"] = False
+        store["last_error"] = ""
+        return True
+    except Exception as e:
+        store["last_error"] = str(e)
+        all_have_cache = all(store[n]["records"] is not None for n in stale)
+        for n in stale:
+            if store[n]["records"] is not None:
+                # 15초간 추가 API 요청을 억제하여 할당량 회복 유도
+                store[n]["ts"] = now - store[n]["ttl"] + 15
+        if all_have_cache:
+            store["using_stale"] = True
+            return True
+        return False
+
+
+def _render_connection_recovery_ui(err_msg: str):
+    """초기 연결 실패 시에도 버전 정보와 복구 버튼을 제공하여 접속 가능성 보장"""
+    latest = UPDATE_HISTORY[0]
+    changes_html = "".join([f"<li>{html.escape(c)}</li>" for c in latest["changes"]])
+    st.markdown(f"""
+        <div class="section-card">
+            <h3>🏢 러셀대치학원 시설보수 및 재고관리 시스템 ({APP_VERSION})</h3>
+            <p style="color:#64748b; font-size:0.9rem;">최종 업데이트: {LAST_UPDATED}</p>
+            <ul style="font-size:0.88rem; color:#334155;">{changes_html}</ul>
+        </div>
+    """, unsafe_allow_html=True)
+    st.error(f"⚠️ 구글 시트 연결이 일시적으로 지연되고 있습니다: {err_msg}")
+    st.info("💡 구글 API 분당 읽기 할당량 초과(429)인 경우 약 30초~1분 후 자동 회복됩니다. 아래 버튼을 눌러 다시 연결해 주세요.")
+    if st.button("🔄 지금 다시 연결하기", use_container_width=True):
+        get_spreadsheet_bundle.clear()
+        invalidate_all_sheets()
+        st.rerun()
     st.stop()
 
-# 선택적 "config" 시트
-try:
-    ws_config = sh.worksheet("config")
-except Exception:
-    ws_config = None
 
 try:
-    FACILITY_HEADER = ws_facility.row_values(1)
-except Exception:
-    FACILITY_HEADER = []
+    bundle = get_spreadsheet_bundle()
+    gc = bundle["gc"]
+    drive_service = bundle["drive_service"]
+    sh = bundle["sh"]
+    ws_users = bundle["ws_users"]
+    ws_facility = bundle["ws_facility"]
+    ws_inventory = bundle["ws_inventory"]
+    ws_config = bundle["ws_config"]
+
+    sync_ok = sync_sheets(bundle)
+    if not sync_ok:
+        _render_connection_recovery_ui(_get_sheet_store()["last_error"])
+except Exception as e:
+    _render_connection_recovery_ui(str(e))
+
+_store_state = _get_sheet_store()
+if _store_state.get("using_stale"):
+    st.toast("⏳ 구글 시트 API 요청 한도 초과로 최근 캐시 데이터를 표시 중입니다.", icon="⚠️")
+
+FACILITY_HEADER = _store_state["facility"]["header"]
 FACILITY_HAS_ID = "요청ID" in FACILITY_HEADER
 
 
 # ==========================================
-# 캐시된 데이터 읽기 (예외 처리 추가)
+# 캐시된 데이터 접근 래퍼 (하위 호환 + 안전한 갱신)
 # ==========================================
-@st.cache_data(ttl=20, show_spinner=False)
+def get_facility_records_with_rows():
+    sync_sheets(bundle, ["facility"])
+    entry = _get_sheet_store()["facility"]
+    return list(entry["records"] or []), list(entry["row_nums"] or [])
+
+
 def get_facility_records():
-    try:
-        return ws_facility.get_all_records()
-    except Exception:
-        return []
+    recs, _ = get_facility_records_with_rows()
+    return recs
 
-@st.cache_data(ttl=20, show_spinner=False)
+
 def get_inventory_records():
-    try:
-        return ws_inventory.get_all_records()
-    except Exception:
-        return []
+    sync_sheets(bundle, ["inventory"])
+    return list(_get_sheet_store()["inventory"]["records"] or [])
 
-@st.cache_data(ttl=60, show_spinner=False)
+
+def get_users_records_with_rows():
+    sync_sheets(bundle, ["users"])
+    entry = _get_sheet_store()["users"]
+    return list(entry["records"] or []), list(entry["row_nums"] or [])
+
+
 def get_users_records():
-    try:
-        return ws_users.get_all_records()
-    except Exception:
-        return []
+    recs, _ = get_users_records_with_rows()
+    return recs
 
-@st.cache_data(ttl=60, show_spinner=False)
+
 def get_config_records():
-    if ws_config is None:
-        return []
-    try:
-        return ws_config.get_all_records()
-    except Exception:
-        return []
+    sync_sheets(bundle, ["config"])
+    return list(_get_sheet_store()["config"]["records"] or [])
 
 
-def find_facility_row_by_id(row_id):
-    try:
-        cell = ws_facility.find(str(row_id))
-        return cell.row
-    except Exception:
-        return None
+def refresh_sheet_now(name: str):
+    invalidate_sheet(name)
+    sync_sheets(bundle, [name], force=True)
 
 
 MAX_PHOTO_MB = 8
 
+
 def photo_too_large(uploaded_file):
     return uploaded_file is not None and uploaded_file.size > MAX_PHOTO_MB * 1024 * 1024
+
 
 def upload_photo_to_drive(uploaded_file):
     if uploaded_file is None:
@@ -420,13 +817,9 @@ def upload_photo_to_drive(uploaded_file):
         st.warning(f"사진 업로드 실패: {e}")
         return ""
 
-def clean_phone(phone_str):
-    if pd.isna(phone_str):
-        return ""
-    return re.sub(r"[^0-9]", "", str(phone_str))
 
 def status_badge(status):
-    status = str(status).strip() or "접수완료"
+    status = html.escape(str(status).strip() or "접수완료")
     return f'<span class="badge badge-{status}">{status}</span>'
 
 
@@ -442,7 +835,6 @@ CONSUMABLES_BASE = [
 
 FLOORS = ["2층", "6층", "7층"]
 
-# 구글 시트 열 헤더용 품목 전체 (층 구분 포함)
 ALL_SHEET_ITEMS = [f"{item} ({floor})" for item in CONSUMABLES_BASE for floor in FLOORS] + [
     "노트북", "출결리더기", "보조배터리", "캠코더",
     "삼각대 및 플레이트", "SD카드", "빔포인터", "빔리모콘", "에어컨리모콘"
@@ -467,11 +859,13 @@ CATEGORY_BY_SPACE_DEFAULT = {
     "기타공간": ["엘리베이터", "복도/계단/난간", "정수기/음료대", "자동문/출입문", "조명/전기", "신규 물품 구매 요청", "기타 시설"]
 }
 
+
 def _config_list(category, fallback):
     rows = get_config_records()
     items = [str(r.get("항목값", "")).strip() for r in rows
              if str(r.get("카테고리", "")).strip() == category and str(r.get("항목값", "")).strip()]
     return items if items else fallback
+
 
 CONSUMABLES = _config_list("소모품", CONSUMABLES_BASE)
 EQUIPMENT = _config_list("비품", EQUIPMENT_DEFAULT)
@@ -482,13 +876,19 @@ CATEGORY_BY_SPACE = {k: _config_list(f"분류_{k}", v) for k, v in CATEGORY_BY_S
 LOW_STOCK_THRESHOLDS = {"생수": 10, "물티슈": 5, "각티슈": 5}
 DEFAULT_LOW_STOCK = {"consumable": 5, "equipment": 2}
 
+
 def get_threshold(item):
     base_item = item.split(" (")[0]
     if base_item in LOW_STOCK_THRESHOLDS:
         return LOW_STOCK_THRESHOLDS[base_item]
     return DEFAULT_LOW_STOCK["consumable"] if base_item in CONSUMABLES else DEFAULT_LOW_STOCK["equipment"]
 
+
 STATUS_OPTIONS = ["접수완료", "처리중", "완료"]
+
+# 가입 코드 (st.secrets 우선, 미설정 시 기본값)
+SIGNUP_CODE = str(get_secret("signup_code", "russel2026"))
+ADMIN_SIGNUP_CODE = str(get_secret("admin_signup_code", "russeladmin2026"))
 
 # 세션 초기화
 if "logged_in" not in st.session_state: st.session_state["logged_in"] = False
@@ -498,20 +898,46 @@ if "user_role" not in st.session_state: st.session_state["user_role"] = ""
 
 
 # ==========================================
-# 🔑 자동 로그인 검증 (쿠키 기반)
+# 🔑 자동 로그인 검증 (쿠키 해시 토큰 기반)
 # ==========================================
 if not st.session_state["logged_in"]:
-    cookie_phone = cookie_manager.get(cookie="russel_user_phone")
-    if cookie_phone:
-        df_u = pd.DataFrame(get_users_records())
+    cookie_token = safe_get_cookie("russel_auth_token")
+    cookie_phone = safe_get_cookie("russel_user_phone")
+
+    target_token = cookie_token
+    if not target_token and cookie_phone:
+        target_token = generate_auth_token(cookie_phone)
+
+    if target_token:
+        users_list = get_users_records()
+        # API 장애가 아닌 실제 시트 데이터 확인
+        users_cache_loaded = _get_sheet_store()["users"]["records"] is not None
+        df_u = pd.DataFrame(users_list)
+        matched = None
         if not df_u.empty:
-            for idx, row in df_u.iterrows():
-                if clean_phone(str(row.get("전화번호", ""))) == clean_phone(cookie_phone):
-                    st.session_state["logged_in"] = True
-                    st.session_state["user_name"] = str(row.get("이름", "")).strip()
-                    st.session_state["user_phone"] = clean_phone(cookie_phone)
-                    st.session_state["user_role"] = str(row.get("분류", "직원")).strip()
-                    st.rerun()
+            for _, row in df_u.iterrows():
+                raw_p = str(row.get("전화번호", ""))
+                if any(generate_auth_token(v) == target_token for v in phone_variants(raw_p)):
+                    matched = row
+                    break
+
+        if matched is not None:
+            role = str(matched.get("분류", "직원")).strip()
+            if role == "비활성":
+                safe_delete_cookie("russel_auth_token")
+                safe_delete_cookie("russel_user_phone")
+            else:
+                st.session_state["logged_in"] = True
+                st.session_state["user_name"] = str(matched.get("이름", "")).strip()
+                st.session_state["user_phone"] = canonical_phone(str(matched.get("전화번호", "")))
+                st.session_state["user_role"] = role
+                if not cookie_token:
+                    safe_set_cookie("russel_auth_token", target_token, days=30)
+                st.rerun()
+        elif users_cache_loaded and not _get_sheet_store().get("using_stale"):
+            # 정상 조회 결과 시트에서 삭제된 계정이면 쿠키 파기
+            safe_delete_cookie("russel_auth_token")
+            safe_delete_cookie("russel_user_phone")
 
 
 # ==========================================
@@ -521,13 +947,19 @@ if not st.session_state["logged_in"]:
     left, right = st.columns([1, 1.3], gap="large")
 
     with left:
-        st.markdown("""
+        latest_update = UPDATE_HISTORY[0]
+        latest_bullets = "".join([f"<div style='margin-bottom:4px;'>• {html.escape(c)}</div>" for c in latest_update["changes"][:3]])
+        st.markdown(f"""
             <div class="brand-panel">
                 <h1>🏢 러셀대치학원<br>통합 관리 시스템</h1>
                 <p>시설 고장 신고, 물품 구매 요청, 소모품·비품 재고를<br>
                 한 곳에서 빠르고 직관적으로 관리하세요.</p>
-                <div style="margin-top: 30px; font-size: 0.9rem; opacity: 0.8;">
+                <div style="margin-top: 22px; font-size: 0.9rem; opacity: 0.9;">
                 ✓ 시설 보수 신고 <br> ✓ 구매 요청 <br> ✓ 재고 관리
+                </div>
+                <div style="margin-top: 28px; padding: 14px; background: rgba(255,255,255,0.1); border-radius: 10px; font-size: 0.8rem;">
+                    <div style="font-weight: 700; margin-bottom: 6px;">📌 버전: {APP_VERSION} ({latest_update['date']} 업데이트)</div>
+                    <div style="opacity: 0.9; line-height: 1.45;">{latest_bullets}</div>
                 </div>
             </div>
         """, unsafe_allow_html=True)
@@ -547,31 +979,39 @@ if not st.session_state["logged_in"]:
 
             if submitted:
                 c_name = login_name.strip()
-                c_phone = clean_phone(login_phone)
+                c_phone = canonical_phone(login_phone)
 
                 if not c_name or not c_phone:
                     st.error("이름과 전화번호를 모두 입력해 주세요.")
                 else:
                     df_u = pd.DataFrame(get_users_records())
                     matched = None
+                    input_variants = phone_variants(login_phone)
                     if not df_u.empty:
-                        for idx, row in df_u.iterrows():
-                            if str(row.get("이름", "")).strip() == c_name and clean_phone(str(row.get("전화번호", ""))) == c_phone:
+                        for _, row in df_u.iterrows():
+                            row_name = str(row.get("이름", "")).strip()
+                            row_variants = phone_variants(str(row.get("전화번호", "")))
+                            if row_name == c_name and (input_variants & row_variants):
                                 matched = row
                                 break
 
                     if matched is not None:
-                        st.session_state["logged_in"] = True
-                        st.session_state["user_name"] = c_name
-                        st.session_state["user_phone"] = c_phone
-                        st.session_state["user_role"] = str(matched.get("분류", "직원")).strip()
+                        u_role = str(matched.get("분류", "직원")).strip()
+                        if u_role == "비활성":
+                            st.error("🔒 비활성화된 계정입니다. 교무팀 관리자에게 문의하세요.")
+                        else:
+                            st.session_state["logged_in"] = True
+                            st.session_state["user_name"] = c_name
+                            st.session_state["user_phone"] = c_phone
+                            st.session_state["user_role"] = u_role
 
-                        if auto_login:
-                            cookie_manager.set("russel_user_phone", c_phone, expires_at=datetime.now() + timedelta(days=30))
-                            time.sleep(0.2)
+                            if auto_login:
+                                auth_token = generate_auth_token(c_phone)
+                                safe_set_cookie("russel_auth_token", auth_token, days=30)
+                                time.sleep(0.2)
 
-                        st.success(f"🎉 {c_name}님 환영합니다!")
-                        st.rerun()
+                            st.success(f"🎉 {c_name}님 환영합니다!")
+                            st.rerun()
                     else:
                         st.error("이름 또는 전화번호가 일치하지 않습니다. 처음이시라면 회원가입 탭을 이용해 주세요.")
 
@@ -580,61 +1020,98 @@ if not st.session_state["logged_in"]:
             st.markdown("<p style='color:#64748b; font-size:0.9rem; margin-bottom: 20px;'>시스템 사용을 위해 계정을 생성합니다.</p>", unsafe_allow_html=True)
 
             signup_role = st.selectbox("가입 구분", ["직원", "강사", "교무팀", "조교"])
-            
+
             if signup_role == "교무팀":
-                st.info("💡 **교무팀**: 시설요청 상태변경 및 재고 관리 전체 권한이 부여됩니다.")
+                st.info("💡 **교무팀**: 시설요청 상태변경, 사용자 권한 관리 및 재고 관리 전체 권한이 부여됩니다. (관리자 가입 코드 필요)")
             elif signup_role == "조교":
-                st.info("💡 **조교**: 시설보수/구매요청 및 마감 재고 실사 등록 권한이 부여됩니다.")
+                st.info("💡 **조교**: 시설보수/구매요청, 마감 실사 등록 및 재고 대시보드 열람 권한이 부여됩니다. (관리자 가입 코드 필요)")
             else:
-                st.write("")
+                st.info("💡 **직원/강사**: 시설보수 및 물품 구매 요청 등록/조회가 가능합니다. (학원 가입 코드 필요)")
 
             signup_name = st.text_input("이름", key="s_name", placeholder="예: 홍길동")
             signup_phone = st.text_input("전화번호", key="s_phone", placeholder="숫자만 입력 (- 없이)")
             st.caption("전화번호는 로그인 시 비밀번호처럼 사용됩니다. 8자리 이상 입력해 주세요.")
-            
+
+            signup_code_input = st.text_input(
+                "학원 가입 코드",
+                type="password",
+                key="s_code",
+                placeholder="학원에서 안내받은 가입 코드 입력"
+            )
+            st.caption("※ 보안을 위해 승인된 가입 코드를 입력해야 계정이 생성됩니다.")
+
             st.write("")
             if st.button("회원가입 완료", use_container_width=True, key="signup_btn"):
                 c_name = signup_name.strip()
-                c_phone = clean_phone(signup_phone)
+                c_phone = canonical_phone(signup_phone)
+                c_code = signup_code_input.strip()
 
                 if not c_name:
                     st.error("이름을 입력해 주세요.")
-                elif len(c_phone) < 8:
+                elif len(clean_phone(signup_phone)) < 8:
                     st.error("전화번호는 숫자 8자리 이상으로 입력해 주세요.")
+                elif not c_code:
+                    st.error("학원 가입 코드를 입력해 주세요.")
+                elif signup_role in ["교무팀", "조교"] and c_code != ADMIN_SIGNUP_CODE:
+                    st.error("🔒 관리자(교무팀/조교) 가입 코드가 일치하지 않습니다. 교무팀에 문의해 주세요.")
+                elif signup_role not in ["교무팀", "조교"] and c_code != SIGNUP_CODE:
+                    st.error("🔒 학원 가입 코드가 일치하지 않습니다. 관리자에게 문의해 주세요.")
                 else:
-                    now_str = get_kst_now()
-                    ws_users.append_row([c_name, f"'{c_phone}", signup_role, now_str])
-                    get_users_records.clear()
-                    
-                    cookie_manager.set("russel_user_phone", c_phone, expires_at=datetime.now() + timedelta(days=30))
-                    time.sleep(0.2)
-                    st.session_state["logged_in"] = True
-                    st.session_state["user_name"] = c_name
-                    st.session_state["user_phone"] = c_phone
-                    st.session_state["user_role"] = signup_role
-                    st.success("✅ 회원가입 및 로그인 완료!")
-                    st.rerun()
+                    # 중복 가입 방지 (전화번호 기준, 앞자리 0 누락 포함 비교)
+                    df_u = pd.DataFrame(get_users_records())
+                    input_vars = phone_variants(c_phone)
+                    is_duplicate = False
+                    if not df_u.empty and "전화번호" in df_u.columns:
+                        for p in df_u["전화번호"]:
+                            if input_vars & phone_variants(str(p)):
+                                is_duplicate = True
+                                break
+
+                    if is_duplicate:
+                        st.error("이미 등록된 전화번호입니다. 로그인 탭을 이용해 주세요.")
+                    else:
+                        now_str = get_kst_now()
+                        call_with_retry(lambda: ws_users.append_row([c_name, f"'{c_phone}", signup_role, now_str]))
+                        refresh_sheet_now("users")
+
+                        auth_token = generate_auth_token(c_phone)
+                        safe_set_cookie("russel_auth_token", auth_token, days=30)
+                        time.sleep(0.2)
+                        st.session_state["logged_in"] = True
+                        st.session_state["user_name"] = c_name
+                        st.session_state["user_phone"] = c_phone
+                        st.session_state["user_role"] = signup_role
+                        st.success("✅ 회원가입 및 로그인 완료!")
+                        st.rerun()
     st.stop()
 
+
 # ==========================================
-# 2. 메인 화면 및 메뉴
+# 2. 메인 화면 및 사이드바 메뉴
 # ==========================================
 st.sidebar.markdown(f"""
     <div class="user-card">
         <div style="font-size: 0.8rem; opacity: 0.8; margin-bottom: 4px;">{get_kst_now()} (KST)</div>
-        <div class="u-name">👤 {st.session_state['user_name']}</div>
-        <span class="u-role">{st.session_state['user_role']}</span>
+        <div class="u-name">👤 {html.escape(st.session_state['user_name'])}</div>
+        <span class="u-role">{html.escape(st.session_state['user_role'])}</span>
     </div>
 """, unsafe_allow_html=True)
 
-if st.sidebar.button("🚪 로그아웃", use_container_width=True):
-    cookie_manager.delete("russel_user_phone")
-    st.session_state["logged_in"] = False
-    st.session_state["user_name"] = ""
-    st.session_state["user_phone"] = ""
-    st.session_state["user_role"] = ""
-    time.sleep(0.2)
-    st.rerun()
+col_sb1, col_sb2 = st.sidebar.columns(2)
+with col_sb1:
+    if st.button("🔄 새로고침", use_container_width=True, help="구글 시트 최신 데이터를 즉시 불러옵니다"):
+        sync_sheets(bundle, force=True)
+        st.rerun()
+with col_sb2:
+    if st.button("🚪 로그아웃", use_container_width=True):
+        safe_delete_cookie("russel_auth_token")
+        safe_delete_cookie("russel_user_phone")
+        st.session_state["logged_in"] = False
+        st.session_state["user_name"] = ""
+        st.session_state["user_phone"] = ""
+        st.session_state["user_role"] = ""
+        time.sleep(0.2)
+        st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("<h4 style='color: white !important; font-size: 1rem; margin-bottom: 10px;'>메뉴 이동</h4>", unsafe_allow_html=True)
@@ -644,13 +1121,42 @@ is_full_admin = (user_role == "교무팀")
 is_silsa_staff = (user_role == "조교")
 can_access_inventory = is_full_admin or is_silsa_staff
 
-# 물품/비품 재고 관리를 상단에 배치
-menu_options = ["📦 물품/비품 재고 관리", "🛠️ 시설 보수 및 구매 요청"] if can_access_inventory else ["🛠️ 시설 보수 및 구매 요청"]
+if is_full_admin:
+    menu_options = ["📦 물품/비품 재고 관리", "🛠️ 시설 보수 및 구매 요청", "👥 사용자 권한 관리"]
+elif can_access_inventory:
+    menu_options = ["📦 물품/비품 재고 관리", "🛠️ 시설 보수 및 구매 요청"]
+else:
+    menu_options = ["🛠️ 시설 보수 및 구매 요청"]
 
 menu = st.sidebar.radio("Navigation", menu_options, label_visibility="collapsed")
 
+# 사이드바 하단 버전 정보 및 업데이트 내역 상시 표기
+st.sidebar.markdown("---")
+latest_ver = UPDATE_HISTORY[0]
+st.sidebar.markdown(f"""
+    <div style="background: rgba(255,255,255,0.06); border: 1px solid #374151; border-radius: 10px; padding: 12px; margin-top: 6px;">
+        <div style="color: #60a5fa; font-weight: 700; font-size: 0.85rem; margin-bottom: 4px;">
+            📌 버전: {APP_VERSION} ({latest_ver['date']} 업데이트)
+        </div>
+        <div style="color: #cbd5e1; font-size: 0.74rem; line-height: 1.45; margin-top: 6px;">
+            • 429 API 할당량 초과 방지 & 캐시 폴백<br>
+            • 가입코드·토큰 보안 & 권한관리 UI<br>
+            • 조교 재고 대시보드 & 일괄 입·출고<br>
+            • 전산재고 연동 실사 & 층별·발주 표<br>
+            • 중복알림·처리메모·모바일 카드·QR·두레이
+        </div>
+    </div>
+""", unsafe_allow_html=True)
+
+with st.sidebar.expander("📜 전체 업데이트 상세 보기"):
+    for item in UPDATE_HISTORY:
+        st.markdown(f"**{item['version']}** ({item['date']})")
+        for ch in item["changes"]:
+            st.markdown(f"- {ch}")
+
+
 # ==========================================
-# 3. 요청 등록
+# 3. 요청 등록 (시설 보수 및 구매 요청)
 # ==========================================
 if menu == "🛠️ 시설 보수 및 구매 요청":
     st.title("🛠️ 시설 보수 및 물품 구매 요청")
@@ -662,11 +1168,47 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
         req_type = st.radio("요청 유형 선택", ["🔧 시설 보수 요청", "🛒 신규 물품/비품 구매 요청"], horizontal=True, label_visibility="collapsed")
         
         st.write("")
+
+        # QR코드 쿼리 파라미터 확인 (?space=강의실&detail=201호)
+        try:
+            qp = st.query_params
+            param_space = qp.get("space", None)
+            param_detail = qp.get("detail", None)
+        except Exception:
+            try:
+                qp = st.experimental_get_query_params()
+                param_space = qp.get("space", [None])[0]
+                param_detail = qp.get("detail", [None])[0]
+            except Exception:
+                param_space, param_detail = None, None
+
+        space_keys = list(SPACES.keys())
+        def_space_idx = space_keys.index(param_space) if (param_space and param_space in space_keys) else 0
+
         col_a, col_b = st.columns(2)
         with col_a:
-            space_cat = st.selectbox("공간 구분", list(SPACES.keys()))
+            space_cat = st.selectbox("공간 구분", space_keys, index=def_space_idx)
         with col_b:
-            det_space = st.selectbox("세부 위치", SPACES[space_cat])
+            det_options = SPACES[space_cat]
+            def_detail_idx = det_options.index(param_detail) if (param_detail and param_detail in det_options) else 0
+            det_space = st.selectbox("세부 위치", det_options, index=def_detail_idx)
+
+        # 중복 신고 방지 알림 검사
+        df_facility_all = pd.DataFrame(get_facility_records())
+        if not df_facility_all.empty and "세부위치" in df_facility_all.columns and "상태" in df_facility_all.columns:
+            unresolved = df_facility_all[
+                (df_facility_all["세부위치"] == det_space) &
+                (df_facility_all["상태"].isin(["접수완료", "처리중"]))
+            ]
+            if not unresolved.empty:
+                st.warning(f"⚠️ **[중복 접수 주의]** 선택하신 위치(**'{det_space}'**)에 이미 처리 중인 요청이 **{len(unresolved)}건** 있습니다:")
+                for _, un_row in unresolved.tail(3).iterrows():
+                    u_dt = html.escape(str(un_row.get("일시", "-")))
+                    u_cat = html.escape(str(un_row.get("분류", "-")))
+                    u_st = html.escape(str(un_row.get("상태", "-")))
+                    u_name = html.escape(str(un_row.get("작성자", "-")))
+                    u_desc = html.escape(str(un_row.get("상세내용", "-"))[:70])
+                    st.markdown(f"- 🗓️ `{u_dt}` | **{u_cat}** | `{u_st}` | 작성자: `{u_name}`<br>&nbsp;&nbsp;↳ *{u_desc}*", unsafe_allow_html=True)
 
         st.markdown("---")
         
@@ -692,8 +1234,18 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
                         now_str = get_kst_now()
                         base_row = [now_str, space_cat, det_space, f"[보수] {cat}", details, photo_url, "접수완료", st.session_state['user_name']]
                         row = ([generate_request_id()] + base_row) if FACILITY_HAS_ID else base_row
-                        ws_facility.append_row(row)
-                        get_facility_records.clear()
+                        call_with_retry(lambda: ws_facility.append_row(row))
+                        refresh_sheet_now("facility")
+
+                        dooray_msg = (
+                            f"🚨 [신규 시설 보수 요청]\n"
+                            f"• 위치: {space_cat} > {det_space}\n"
+                            f"• 분류: [보수] {cat}\n"
+                            f"• 작성자: {st.session_state['user_name']}\n"
+                            f"• 상세내용:\n{details.strip()}"
+                        )
+                        send_dooray_alert(dooray_msg)
+
                     st.success("✅ 요청이 성공적으로 등록되었습니다. '진행 현황 확인' 탭에서 처리 상태를 확인하세요.")
                     st.balloons()
                 else:
@@ -726,8 +1278,18 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
                         full_d = f"[구매물품] {item_n} ({item_q}개)\n[사유] {item_r}"
                         base_row = [now_str, space_cat, det_space, "[구매요청] 물품구매", full_d, photo_url, "접수완료", st.session_state['user_name']]
                         row = ([generate_request_id()] + base_row) if FACILITY_HAS_ID else base_row
-                        ws_facility.append_row(row)
-                        get_facility_records.clear()
+                        call_with_retry(lambda: ws_facility.append_row(row))
+                        refresh_sheet_now("facility")
+
+                        dooray_msg = (
+                            f"🛒 [신규 물품 구매 요청]\n"
+                            f"• 위치: {space_cat} > {det_space}\n"
+                            f"• 물품명: {item_n} ({item_q}개)\n"
+                            f"• 작성자: {st.session_state['user_name']}\n"
+                            f"• 구매사유:\n{item_r.strip()}"
+                        )
+                        send_dooray_alert(dooray_msg)
+
                     st.success("✅ 구매 요청이 성공적으로 등록되었습니다.")
                     st.balloons()
                 else:
@@ -735,12 +1297,15 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
         st.markdown('</div>', unsafe_allow_html=True)
 
     with tab2:
-        df_f = pd.DataFrame(get_facility_records())
+        f_records, f_row_nums = get_facility_records_with_rows()
+        df_f = pd.DataFrame(f_records)
 
         if df_f.empty:
             st.info("등록된 요청 내역이 없습니다.")
         else:
-            st.markdown('<div class="section-card" style="padding-bottom: 10px;">', unsafe_allow_html=True)
+            sheet_row_map = {idx: f_row_nums[idx] for idx in range(len(f_row_nums))}
+
+            st.markdown('<div class="section-card" style="padding-bottom: 12px;">', unsafe_allow_html=True)
             f1, f2, f3 = st.columns([1, 1, 2])
             with f1:
                 space_filter = st.selectbox("공간 필터", ["전체"] + list(SPACES.keys()))
@@ -749,7 +1314,11 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
             with f3:
                 keyword = st.text_input("🔍 내용/작성자 검색", placeholder="검색어를 입력하세요")
 
-            show_mine = st.checkbox("🙋 내가 작성한 요청만 보기", value=(not is_full_admin))
+            col_sub1, col_sub2 = st.columns([2, 1])
+            with col_sub1:
+                show_mine = st.checkbox("🙋 내가 작성한 요청만 보기", value=(not is_full_admin))
+            with col_sub2:
+                view_mode = st.radio("보기 모드", ["📋 표 보기", "📱 모바일 카드 보기"], horizontal=True, label_visibility="collapsed")
             st.markdown('</div>', unsafe_allow_html=True)
 
             df_view = df_f.copy()
@@ -773,53 +1342,117 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
 
             st.markdown(f"**검색 결과: {len(df_view)}건**")
 
-            if is_full_admin and "상태" in df_view.columns:
-                st.info("💡 **관리자 안내**: 표 안의 '상태' 셀을 클릭하여 진행상황을 변경한 뒤, 아래 저장 버튼을 누르세요.")
-                edited = st.data_editor(
-                    df_view,
-                    use_container_width=True,
-                    hide_index=True,
-                    disabled=[c for c in df_view.columns if c != "상태"],
-                    column_config={
-                        "상태": st.column_config.SelectboxColumn("상태", options=STATUS_OPTIONS)
-                    },
-                    key="facility_editor"
-                )
-                if st.button("💾 상태 변경사항 저장하기", use_container_width=True):
-                    updates = []
-                    changes = 0
-                    status_col_num = list(df_f.columns).index("상태") + 1
-                    status_col_letter = col_letter(status_col_num)
-                    for i in edited.index:
-                        new_status = edited.loc[i, "상태"]
-                        old_status = df_view.loc[i, "상태"]
-                        if new_status != old_status:
-                            row_num = None
-                            if "요청ID" in edited.columns and edited.loc[i, "요청ID"]:
-                                row_num = find_facility_row_by_id(edited.loc[i, "요청ID"])
-                            if row_num is None:
-                                row_num = i + 2
-                            updates.append({"range": f"{status_col_letter}{row_num}", "values": [[new_status]]})
-                            changes += 1
+            photo_col = "현장사진" if "현장사진" in df_view.columns else ("사진" if "사진" in df_view.columns else None)
+            has_memo_col = "처리메모" in df_view.columns
 
-                    if updates:
-                        with st.spinner("변경 사항을 서버에 저장 중입니다..."):
-                            ws_facility.batch_update(updates)
-                        get_facility_records.clear()
-                        st.success(f"✅ {changes}건의 상태가 정상적으로 업데이트되었습니다.")
-                        st.rerun()
-                    else:
-                        st.warning("변경된 내용이 없습니다.")
-            else:
-                if "상태" in df_view.columns:
-                    df_show = df_view.drop(columns=["요청ID"], errors="ignore").copy()
-                    df_show["상태"] = df_show["상태"].apply(status_badge)
-                    st.markdown(
-                        f'<div class="scroll-table">{df_show.to_html(escape=False, index=False)}</div>',
-                        unsafe_allow_html=True
-                    )
+            if view_mode == "📱 모바일 카드 보기":
+                if df_view.empty:
+                    st.info("조건에 맞는 요청 건이 없습니다.")
                 else:
-                    st.dataframe(df_view, use_container_width=True, hide_index=True)
+                    for _, row in df_view.iterrows():
+                        r_status = str(row.get("상태", "접수완료")).strip()
+                        r_dt = html.escape(str(row.get("일시", "-")))
+                        r_space = html.escape(str(row.get("공간구분", "")))
+                        r_det = html.escape(str(row.get("세부위치", "")))
+                        r_cat = html.escape(str(row.get("분류", "-")))
+                        r_user = html.escape(str(row.get("작성자", "-")))
+                        r_desc = html.escape(str(row.get("상세내용", "-")))
+                        r_photo_raw = str(row.get(photo_col, "")).strip() if photo_col else ""
+                        r_memo_raw = str(row.get("처리메모", "")).strip() if has_memo_col else ""
+
+                        photo_html = (
+                            f'<div style="margin-top: 8px;"><a href="{html.escape(r_photo_raw)}" target="_blank" class="req-photo-link">📷 첨부사진 보기</a></div>'
+                            if r_photo_raw.startswith("http") else ''
+                        )
+                        memo_html = (
+                            f'<div class="req-card-memo">💬 <b>교무팀 처리메모:</b> {html.escape(r_memo_raw)}</div>'
+                            if r_memo_raw else ''
+                        )
+
+                        card_html = f"""
+                            <div class="req-card">
+                                <div class="req-card-header">
+                                    <div><span style="font-size: 0.85rem; color: #64748b;">🗓️ {r_dt}</span></div>
+                                    <div>{status_badge(r_status)}</div>
+                                </div>
+                                <div class="req-card-meta">
+                                    📍 <b>위치:</b> {r_space} > {r_det} &nbsp;|&nbsp; 🏷️ <b>분류:</b> {r_cat} &nbsp;|&nbsp; 👤 <b>작성자:</b> {r_user}
+                                </div>
+                                <div class="req-card-body">{r_desc}</div>
+                                {memo_html}
+                                {photo_html}
+                            </div>
+                        """
+                        st.markdown(card_html, unsafe_allow_html=True)
+            else:
+                if is_full_admin and "상태" in df_view.columns:
+                    st.info("💡 **관리자 안내**: 표 안의 '상태' 또는 '처리메모' 셀을 더블 클릭하여 수정한 뒤, 아래 저장 버튼을 누르세요.")
+                    
+                    editor_cols = list(df_view.columns)
+                    editable_cols = ["상태"]
+                    if has_memo_col:
+                        editable_cols.append("처리메모")
+                    disabled_cols = [c for c in editor_cols if c not in editable_cols]
+
+                    column_cfg = {
+                        "상태": st.column_config.SelectboxColumn("상태", options=STATUS_OPTIONS)
+                    }
+                    if has_memo_col:
+                        column_cfg["처리메모"] = st.column_config.TextColumn("처리메모", width="large")
+                    if photo_col:
+                        column_cfg[photo_col] = st.column_config.LinkColumn(photo_col, display_text="📷 사진보기")
+
+                    edited = st.data_editor(
+                        df_view,
+                        use_container_width=True,
+                        hide_index=True,
+                        disabled=disabled_cols,
+                        column_config=column_cfg,
+                        key="facility_editor"
+                    )
+
+                    if st.button("💾 상태 및 처리메모 변경사항 저장하기", use_container_width=True):
+                        updates = []
+                        changes = 0
+                        status_col_num = list(df_f.columns).index("상태") + 1
+                        status_col_letter = col_letter(status_col_num)
+
+                        memo_col_letter = None
+                        if has_memo_col:
+                            memo_col_num = list(df_f.columns).index("처리메모") + 1
+                            memo_col_letter = col_letter(memo_col_num)
+
+                        for i in edited.index:
+                            row_num = sheet_row_map.get(i, i + 2)
+
+                            new_status = edited.loc[i, "상태"]
+                            old_status = df_view.loc[i, "상태"]
+                            if new_status != old_status:
+                                updates.append({"range": f"{status_col_letter}{row_num}", "values": [[new_status]]})
+                                changes += 1
+
+                            if has_memo_col and memo_col_letter:
+                                new_memo = str(edited.loc[i, "처리메모"]) if pd.notna(edited.loc[i, "처리메모"]) else ""
+                                old_memo = str(df_view.loc[i, "처리메모"]) if pd.notna(df_view.loc[i, "처리메모"]) else ""
+                                if new_memo != old_memo:
+                                    updates.append({"range": f"{memo_col_letter}{row_num}", "values": [[new_memo]]})
+                                    changes += 1
+
+                        if updates:
+                            with st.spinner("변경 사항을 서버에 저장 중입니다..."):
+                                call_with_retry(lambda: ws_facility.batch_update(updates))
+                            refresh_sheet_now("facility")
+                            st.success(f"✅ 총 {changes}건의 변경사항이 정상적으로 업데이트되었습니다.")
+                            st.rerun()
+                        else:
+                            st.warning("변경된 내용이 없습니다.")
+                else:
+                    column_cfg = {}
+                    if photo_col:
+                        column_cfg[photo_col] = st.column_config.LinkColumn(photo_col, display_text="📷 사진보기")
+
+                    df_show = df_view.drop(columns=["요청ID"], errors="ignore").copy()
+                    st.dataframe(df_show, use_container_width=True, hide_index=True, column_config=column_cfg)
 
             st.write("")
             st.download_button(
@@ -829,8 +1462,9 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
                 mime="text/csv"
             )
 
+
 # ==========================================
-# 4. 재고 관리 
+# 4. 재고 관리 (물품/비품 재고 관리)
 # ==========================================
 elif menu == "📦 물품/비품 재고 관리":
     st.title("📦 재고 통합 관리")
@@ -849,67 +1483,99 @@ elif menu == "📦 물품/비품 재고 관리":
             all_cols = ["일시", "구분", "작성자"] + ALL_SHEET_ITEMS + ["비고"]
             return pd.DataFrame(columns=all_cols)
 
-    def get_last_silsa_values():
-        df = get_safe_inventory_df()
-        if df.empty or "구분" not in df.columns:
-            return {}
-        df_silsa = df[df["구분"] == "실사"]
-        if df_silsa.empty:
-            return {}
-        last_row = df_silsa.iloc[-1]
-        result = {}
-        for item in ALL_SHEET_ITEMS:
-            if item in df_silsa.columns:
-                result[item] = float(pd.to_numeric(last_row.get(item, 0.0), errors="coerce") or 0.0)
-        return result
+    # 실시간 전산 재고 정확 계산 함수 (가장 최근 일시 '실사' 행 + 이후 입출고 누적 가감)
+    def get_current_calculated_stock():
+        df_i = get_safe_inventory_df()
+        current_stock = {item: 0.0 for item in ALL_SHEET_ITEMS}
+        last_silsa_date = "없음"
+        has_silsa_base = False
+
+        if df_i.empty or "구분" not in df_i.columns:
+            return current_stock, last_silsa_date, has_silsa_base
+
+        df_work = df_i.copy()
+        df_work["_orig_order"] = range(len(df_work))
+        if "일시" in df_work.columns:
+            df_work["_dt"] = pd.to_datetime(df_work["일시"], errors="coerce")
+            df_work = df_work.sort_values(
+                by=["_dt", "_orig_order"], kind="mergesort", na_position="first"
+            ).reset_index(drop=True)
+
+        df_silsa = df_work[df_work["구분"].astype(str).str.strip() == "실사"]
+        if not df_silsa.empty:
+            has_silsa_base = True
+            last_silsa_idx = df_silsa.index[-1]
+            last_silsa_date = str(df_work.loc[last_silsa_idx, "일시"]) if "일시" in df_work.columns else "없음"
+            last_silsa_row = df_work.loc[last_silsa_idx]
+
+            for item in ALL_SHEET_ITEMS:
+                if item in df_work.columns:
+                    current_stock[item] = float(pd.to_numeric(last_silsa_row.get(item, 0.0), errors="coerce") or 0.0)
+
+            df_after = df_work.loc[last_silsa_idx + 1:]
+            for item in ALL_SHEET_ITEMS:
+                if item in df_after.columns:
+                    add_vals = pd.to_numeric(df_after[item], errors="coerce").fillna(0.0).sum()
+                    current_stock[item] += float(add_vals)
+        else:
+            for item in ALL_SHEET_ITEMS:
+                if item in df_work.columns:
+                    current_stock[item] = float(pd.to_numeric(df_work[item], errors="coerce").fillna(0.0).sum())
+
+        return current_stock, last_silsa_date, has_silsa_base
 
     # 탭 1: 마감 재고 실사
     with tab1:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
         st.markdown("### 일일 마감 실사 등록")
-        st.caption("※ 각 층별 소모품 수량을 입력하면 총수량이 자동으로 계산됩니다. (소수점 입력 가능)")
+        st.caption("※ 층별 실제 창고 수량을 입력하세요. 전산 재고와 비교할 수 있으며 총수량은 자동 합산됩니다.")
         now_str = get_kst_now()
         
-        st.markdown(f"**작성 정보** &nbsp;|&nbsp; 🗓️ {now_str} &nbsp;|&nbsp; 👤 {st.session_state['user_name']}")
+        st.markdown(f"**작성 정보** &nbsp;|&nbsp; 🗓️ {now_str} &nbsp;|&nbsp; 👤 {html.escape(st.session_state['user_name'])} ({html.escape(st.session_state['user_role'])})")
         st.write("")
         
-        last_vals = get_last_silsa_values()
+        calc_stock, last_silsa_date, has_silsa = get_current_calculated_stock()
+
+        def safe_float(val):
+            try:
+                if pd.isna(val) or val is None or str(val).strip() == "":
+                    return 0.0
+                return float(val)
+            except (ValueError, TypeError):
+                return 0.0
 
         consumable_rows = []
         for item in CONSUMABLES:
-            def safe_float(val):
-                try:
-                    if pd.isna(val) or val is None or str(val).strip() == "":
-                        return 0.0
-                    return float(val)
-                except (ValueError, TypeError):
-                    return 0.0
-
-            v2 = safe_float(last_vals.get(f"{item} (2층)"))
-            v6 = safe_float(last_vals.get(f"{item} (6층)"))
-            v7 = safe_float(last_vals.get(f"{item} (7층)"))
+            v2 = safe_float(calc_stock.get(f"{item} (2층)", 0.0))
+            v6 = safe_float(calc_stock.get(f"{item} (6층)", 0.0))
+            v7 = safe_float(calc_stock.get(f"{item} (7층)", 0.0))
+            comp_total = v2 + v6 + v7
             
             consumable_rows.append({
                 "소모품 명": item,
-                "2층 수량": v2,
-                "6층 수량": v6,
-                "7층 수량": v7,
-                "총 수량 (자동합산)": v2 + v6 + v7
+                "전산재고 (합계)": round(comp_total, 2),
+                "2층 수량": round(v2, 2),
+                "6층 수량": round(v6, 2),
+                "7층 수량": round(v7, 2),
+                "총 실사 수량": round(comp_total, 2)
             })
 
         df_c_input = pd.DataFrame(consumable_rows)
 
-        st.markdown("#### 🧻 층별 소모품 재고")
+        st.markdown("#### 🧻 층별 소모품 실사")
+        st.caption("💡 각 층의 수량을 수정하면 '총 실사 수량'이 자동 계산되며, 좌측 '전산재고'와 오차를 비교할 수 있습니다.")
         edited_c = st.data_editor(
             df_c_input,
             use_container_width=True,
             hide_index=True,
-            disabled=["소모품 명", "총 수량 (자동합산)"],
+            disabled=["소모품 명", "전산재고 (합계)", "총 실사 수량"],
             column_config={
-                "2층 수량": st.column_config.NumberColumn("2층", min_value=0.0, step=0.1, default=0.0, format="%.2f"),
-                "6층 수량": st.column_config.NumberColumn("6층", min_value=0.0, step=0.1, default=0.0, format="%.2f"),
-                "7층 수량": st.column_config.NumberColumn("7층", min_value=0.0, step=0.1, default=0.0, format="%.2f"),
-                "총 수량 (자동합산)": st.column_config.NumberColumn("총 수량 (합계)", format="%.2f")
+                "소모품 명": st.column_config.TextColumn("소모품 명"),
+                "전산재고 (합계)": st.column_config.NumberColumn("전산재고 (합계)", format="%.2f", help="낮 동안의 입/출고가 반영된 실시간 전산 수량"),
+                "2층 수량": st.column_config.NumberColumn("2층 실사", min_value=0.0, step=0.1, default=0.0, format="%.2f"),
+                "6층 수량": st.column_config.NumberColumn("6층 실사", min_value=0.0, step=0.1, default=0.0, format="%.2f"),
+                "7층 수량": st.column_config.NumberColumn("7층 실사", min_value=0.0, step=0.1, default=0.0, format="%.2f"),
+                "총 실사 수량": st.column_config.NumberColumn("총 실사 수량 (합계)", format="%.2f")
             },
             key="c_silsa_editor"
         )
@@ -917,16 +1583,18 @@ elif menu == "📦 물품/비품 재고 관리":
         edited_c["2층 수량"] = edited_c["2층 수량"].fillna(0.0)
         edited_c["6층 수량"] = edited_c["6층 수량"].fillna(0.0)
         edited_c["7층 수량"] = edited_c["7층 수량"].fillna(0.0)
-        edited_c["총 수량 (자동합산)"] = edited_c["2층 수량"] + edited_c["6층 수량"] + edited_c["7층 수량"]
+        edited_c["총 실사 수량"] = edited_c["2층 수량"] + edited_c["6층 수량"] + edited_c["7층 수량"]
 
         st.markdown("---")
-        st.markdown("#### 💻 공용 비품 및 기기 재고")
+        st.markdown("#### 💻 공용 비품 및 기기 실사")
 
         equipment_rows = []
         for item in EQUIPMENT:
+            curr_eq = float(calc_stock.get(item, 0.0))
             equipment_rows.append({
                 "비품 품목명": item,
-                "현재 수량": float(last_vals.get(item, 0.0))
+                "전산 수량": round(curr_eq, 2),
+                "현재 수량": round(curr_eq, 2)
             })
 
         df_e_input = pd.DataFrame(equipment_rows)
@@ -935,8 +1603,10 @@ elif menu == "📦 물품/비품 재고 관리":
             df_e_input,
             use_container_width=True,
             hide_index=True,
-            disabled=["비품 품목명"],
+            disabled=["비품 품목명", "전산 수량"],
             column_config={
+                "비품 품목명": st.column_config.TextColumn("비품 품목명"),
+                "전산 수량": st.column_config.NumberColumn("전산 수량", format="%.2f"),
                 "현재 수량": st.column_config.NumberColumn("실사 확인 수량", min_value=0.0, step=0.1, format="%.2f")
             },
             key="e_silsa_editor"
@@ -945,15 +1615,30 @@ elif menu == "📦 물품/비품 재고 관리":
         st.write("")
         if st.button("📝 마감 실사 데이터 저장하기", use_container_width=True):
             sheet_values = {}
+            low_stock_alerts = []
 
             for _, r in edited_c.iterrows():
                 item = r["소모품 명"]
-                sheet_values[f"{item} (2층)"] = float(r["2층 수량"])
-                sheet_values[f"{item} (6층)"] = float(r["6층 수량"])
-                sheet_values[f"{item} (7층)"] = float(r["7층 수량"])
+                q2 = float(r["2층 수량"])
+                q6 = float(r["6층 수량"])
+                q7 = float(r["7층 수량"])
+                tot_silsa = q2 + q6 + q7
+                sheet_values[f"{item} (2층)"] = q2
+                sheet_values[f"{item} (6층)"] = q6
+                sheet_values[f"{item} (7층)"] = q7
+
+                thresh = get_threshold(item)
+                if tot_silsa <= thresh:
+                    low_stock_alerts.append(f"• {item}: 실사 {tot_silsa:.2f}개 (기준치: {thresh}개, 부족: {thresh - tot_silsa:.2f}개)")
 
             for _, r in edited_e.iterrows():
-                sheet_values[r["비품 품목명"]] = float(r["현재 수량"])
+                eq_item = r["비품 품목명"]
+                eq_q = float(r["현재 수량"])
+                sheet_values[eq_item] = eq_q
+
+                thresh = get_threshold(eq_item)
+                if eq_q <= thresh:
+                    low_stock_alerts.append(f"• {eq_item}: 실사 {eq_q:.2f}개 (기준치: {thresh}개, 부족: {thresh - eq_q:.2f}개)")
 
             row = [now_str, "실사", st.session_state['user_name']]
             for item in ALL_SHEET_ITEMS:
@@ -961,50 +1646,119 @@ elif menu == "📦 물품/비품 재고 관리":
             row.append("정기 마감 실사")
 
             with st.spinner("데이터를 서버에 동기화 중입니다..."):
-                ws_inventory.append_row(row)
-                get_inventory_records.clear()
+                call_with_retry(lambda: ws_inventory.append_row(row))
+                refresh_sheet_now("inventory")
+
+                if low_stock_alerts:
+                    alert_text = (
+                        f"🚨 [마감 재고 실사 알림 - 부족 품목 감지]\n"
+                        f"• 일시: {now_str}\n"
+                        f"• 실사 담당자: {st.session_state['user_name']}\n"
+                        f"• 발주 필요 품목 리스트:\n" + "\n".join(low_stock_alerts)
+                    )
+                    send_dooray_alert(alert_text)
+
             st.success("✅ 오늘자 마감 실사 데이터가 정상적으로 저장되었습니다!")
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # 탭 2: 입고 및 출고 등록
+    # 탭 2: 일괄 입고 및 출고 등록 (교무팀 전용)
     if is_full_admin:
         with tab2:
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
-            st.markdown("### 입고 및 출고(사용) 단건 등록")
-            st.caption("※ 새로운 물품이 들어오거나 사용된 경우 수량 변동 내역만 간편하게 등록합니다.")
+            st.markdown("### 📥/📤 일괄 입고 및 출고 등록")
+            st.caption("※ 여러 품목의 입고 또는 출고 변동 수량을 한 번에 입력하고 일괄 등록할 수 있습니다.")
 
             inout_type = st.radio("작업 구분", ["📥 입고 (재고 추가)", "📤 출고 (재고 차감/사용)"], horizontal=True)
-            
-            st.write("")
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                target_item = st.selectbox("물품 선택 (층 구분 포함)", ALL_SHEET_ITEMS)
-            with col2:
-                qty = st.number_input("변동 수량", min_value=0.01, value=1.0, step=0.1, format="%.2f")
-                
+            is_in = "입고" in inout_type
+            action_label = "입고" if is_in else "출고"
+
             memo = st.text_input("비고/사유 (선택)", placeholder="예: 문구점 대량 구매, 2층 자습관 형광등 교체 등")
+            st.write("")
+
+            st.markdown("#### 🧻 소모품 변동 수량 입력 (0보다 큰 수량만 등록)")
+            inout_c_rows = [
+                {
+                    "소모품 명": item,
+                    "2층 변동수량": 0.0,
+                    "6층 변동수량": 0.0,
+                    "7층 변동수량": 0.0
+                }
+                for item in CONSUMABLES
+            ]
+            df_inout_c = pd.DataFrame(inout_c_rows)
+
+            edited_inout_c = st.data_editor(
+                df_inout_c,
+                use_container_width=True,
+                hide_index=True,
+                disabled=["소모품 명"],
+                column_config={
+                    "소모품 명": st.column_config.TextColumn("소모품 명"),
+                    "2층 변동수량": st.column_config.NumberColumn("2층 수량", min_value=0.0, step=0.1, default=0.0, format="%.2f"),
+                    "6층 변동수량": st.column_config.NumberColumn("6층 수량", min_value=0.0, step=0.1, default=0.0, format="%.2f"),
+                    "7층 변동수량": st.column_config.NumberColumn("7층 수량", min_value=0.0, step=0.1, default=0.0, format="%.2f"),
+                },
+                key="inout_c_editor"
+            )
+
+            st.markdown("---")
+            st.markdown("#### 💻 비품/기기 변동 수량 입력 (0보다 큰 수량만 등록)")
+            inout_e_rows = [{"비품 품목명": item, "변동수량": 0.0} for item in EQUIPMENT]
+            df_inout_e = pd.DataFrame(inout_e_rows)
+
+            edited_inout_e = st.data_editor(
+                df_inout_e,
+                use_container_width=True,
+                hide_index=True,
+                disabled=["비품 품목명"],
+                column_config={
+                    "비품 품목명": st.column_config.TextColumn("비품 품목명"),
+                    "변동수량": st.column_config.NumberColumn("변동 수량", min_value=0.0, step=0.1, default=0.0, format="%.2f")
+                },
+                key="inout_e_editor"
+            )
 
             st.write("")
-            if st.button("내역 등록하기", use_container_width=True):
-                now_str = get_kst_now()
-                is_in = "입고" in inout_type
-                action_label = "입고" if is_in else "출고"
-                record_qty = float(qty) if is_in else -float(qty)
+            btn_label = f"일괄 {action_label} 내역 등록하기"
+            if st.button(btn_label, use_container_width=True):
+                changes_dict = {}
 
-                row_data = [now_str, action_label, st.session_state['user_name']]
-                for item in ALL_SHEET_ITEMS:
-                    row_data.append(record_qty if item == target_item else 0.0)
-                row_data.append(memo)
+                for _, r in edited_inout_c.iterrows():
+                    item = r["소모품 명"]
+                    v2 = float(r["2층 변동수량"]) if pd.notna(r["2층 변동수량"]) else 0.0
+                    v6 = float(r["6층 변동수량"]) if pd.notna(r["6층 변동수량"]) else 0.0
+                    v7 = float(r["7층 변동수량"]) if pd.notna(r["7층 변동수량"]) else 0.0
+                    if v2 > 0: changes_dict[f"{item} (2층)"] = v2
+                    if v6 > 0: changes_dict[f"{item} (6층)"] = v6
+                    if v7 > 0: changes_dict[f"{item} (7층)"] = v7
 
-                with st.spinner("내역을 기록하고 있습니다..."):
-                    ws_inventory.append_row(row_data)
-                    get_inventory_records.clear()
-                st.success(f"🎉 [{target_item}] {qty}개 {action_label} 처리가 완료되었습니다!")
-                st.rerun()
+                for _, r in edited_inout_e.iterrows():
+                    item = r["비품 품목명"]
+                    ve = float(r["변동수량"]) if pd.notna(r["변동수량"]) else 0.0
+                    if ve > 0: changes_dict[item] = ve
+
+                if not changes_dict:
+                    st.warning("⚠️ 입력된 변동 수량이 없습니다. 0보다 큰 수량을 하나 이상 입력해 주세요.")
+                else:
+                    now_str = get_kst_now()
+                    row_data = [now_str, action_label, st.session_state['user_name']]
+                    for item in ALL_SHEET_ITEMS:
+                        if item in changes_dict:
+                            qty_val = changes_dict[item]
+                            row_data.append(qty_val if is_in else -qty_val)
+                        else:
+                            row_data.append(0.0)
+                    row_data.append(memo)
+
+                    with st.spinner("내역을 기록하고 있습니다..."):
+                        call_with_retry(lambda: ws_inventory.append_row(row_data))
+                        refresh_sheet_now("inventory")
+                    st.success(f"🎉 총 {len(changes_dict)}개 품목의 {action_label} 처리가 성공적으로 등록되었습니다!")
+                    st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-    # 탭 3: 현황 및 누적 계산
+    # 탭 3: 현황 및 누적 계산 (교무팀 및 조교 모두 열람 가능)
     if can_access_inventory:
         with tab3:
             df_i = get_safe_inventory_df()
@@ -1012,55 +1766,93 @@ elif menu == "📦 물품/비품 재고 관리":
             if df_i.empty:
                 st.info("아직 등록된 재고 데이터가 없습니다.")
             else:
-                df_silsa = df_i[df_i["구분"] == "실사"]
+                calc_stock, last_silsa_date, has_silsa = get_current_calculated_stock()
 
-                if not df_silsa.empty:
-                    last_silsa_idx = df_silsa.index[-1]
-                    last_silsa_date = df_i.loc[last_silsa_idx, "일시"]
-                    
-                    st.markdown("### 📊 실시간 재고 현황")
-                    st.caption(f"💡 가장 최근 실사일({last_silsa_date})을 기준으로 이후의 입/출고 내역이 자동 계산된 현재 수량입니다.")
-
-                    df_calc = df_i.loc[last_silsa_idx:].copy()
-
-                    current_stock = {}
-                    for item in ALL_SHEET_ITEMS:
-                        if item in df_calc.columns:
-                            current_stock[item] = float(pd.to_numeric(df_calc[item], errors='coerce').fillna(0.0).sum())
-                        else:
-                            current_stock[item] = 0.0
-
-                    consumable_totals = {}
-                    for item in CONSUMABLES:
-                        total_q = (current_stock.get(f"{item} (2층)", 0.0) +
-                                   current_stock.get(f"{item} (6층)", 0.0) +
-                                   current_stock.get(f"{item} (7층)", 0.0))
-                        consumable_totals[item] = total_q
-
-                    low_stock_items = [i for i, q in consumable_totals.items() if q <= get_threshold(i)]
-                    if low_stock_items:
-                        st.markdown(
-                            "⚠️ **재고 부족 알림** (기준치 이하 품목) <br>" + "".join(
-                                [f'<span class="low-stock-pill">{i} ({consumable_totals[i]:.2f})</span>' for i in low_stock_items]
-                            ),
-                            unsafe_allow_html=True
-                        )
-                    else:
-                        st.success("✅ 현재 기준치 이하로 부족한 품목이 없습니다.")
-
-                    st.write("")
-                    col1, col2 = st.columns(2, gap="large")
-                    with col1:
-                        st.markdown("#### 📄 소모품 총 재고 (층별 합계)")
-                        df_c_stock = pd.DataFrame([{"품목명": k, "현재 보유량": round(v, 2)} for k, v in consumable_totals.items()])
-                        st.dataframe(df_c_stock, use_container_width=True, hide_index=True)
-
-                    with col2:
-                        st.markdown("#### 💻 비품/기기 현재 재고")
-                        df_e_stock = pd.DataFrame([{"품목명": k, "현재 보유량": round(v, 2)} for k, v in current_stock.items() if k in EQUIPMENT])
-                        st.dataframe(df_e_stock, use_container_width=True, hide_index=True)
+                st.markdown("### 📊 실시간 재고 대시보드")
+                if has_silsa:
+                    st.caption(f"💡 가장 최근 실사일(**{last_silsa_date}**)을 기준으로 이후의 입/출고 내역이 자동 계산된 현재 보유 수량입니다.")
                 else:
-                    st.warning("⚠️ 등록된 '마감 실사' 데이터의 기준점이 없습니다. 먼저 [마감 실사 등록] 탭에서 실사 데이터를 입력해 주세요.")
+                    st.warning("⚠️ 등록된 '마감 실사' 데이터의 기준점이 없습니다. 전체 이력을 기준으로 단순 합산 표시 중입니다.")
+
+                consumable_totals = {}
+                floor_comparison_data = []
+
+                for item in CONSUMABLES:
+                    q2 = calc_stock.get(f"{item} (2층)", 0.0)
+                    q6 = calc_stock.get(f"{item} (6층)", 0.0)
+                    q7 = calc_stock.get(f"{item} (7층)", 0.0)
+                    total_q = q2 + q6 + q7
+                    consumable_totals[item] = total_q
+                    floor_comparison_data.append({
+                        "소모품명": item,
+                        "2층 재고": round(q2, 2),
+                        "6층 재고": round(q6, 2),
+                        "7층 재고": round(q7, 2),
+                        "총 합계": round(total_q, 2)
+                    })
+
+                order_needed_list = []
+                for item in CONSUMABLES:
+                    tot = consumable_totals[item]
+                    th = get_threshold(item)
+                    if tot <= th:
+                        order_needed_list.append({
+                            "구분": "소모품",
+                            "품목명": item,
+                            "현재 보유량": round(tot, 2),
+                            "최소 기준치": th,
+                            "부족 수량(발주필요)": round(th - tot, 2)
+                        })
+
+                for item in EQUIPMENT:
+                    eq_q = calc_stock.get(item, 0.0)
+                    th = get_threshold(item)
+                    if eq_q <= th:
+                        order_needed_list.append({
+                            "구분": "비품",
+                            "품목명": item,
+                            "현재 보유량": round(eq_q, 2),
+                            "최소 기준치": th,
+                            "부족 수량(발주필요)": round(th - eq_q, 2)
+                        })
+
+                df_order_needed = pd.DataFrame(order_needed_list)
+
+                if not df_order_needed.empty:
+                    pills = "".join([
+                        f'<span class="low-stock-pill">{html.escape(str(r["품목명"]))} (보유: {r["현재 보유량"]:.2f})</span>'
+                        for _, r in df_order_needed.iterrows()
+                    ])
+                    st.markdown(f"⚠️ **재고 부족 알림 (기준치 이하 품목)**<br>{pills}", unsafe_allow_html=True)
+                    st.write("")
+
+                    with st.expander("🛒 **[발주 필요 목록]** 상세 보기 및 다운로드", expanded=True):
+                        st.dataframe(df_order_needed, use_container_width=True, hide_index=True)
+                        st.download_button(
+                            "⬇️ 발주 필요 목록 CSV 다운로드",
+                            df_order_needed.to_csv(index=False).encode("utf-8-sig"),
+                            file_name=f"발주필요목록_{datetime.now().strftime('%Y%m%d')}.csv",
+                            mime="text/csv"
+                        )
+                else:
+                    st.success("✅ 현재 기준치 이하로 부족한 품목이 없습니다. 모든 재고가 충분합니다.")
+
+                st.write("")
+                st.markdown("#### 🏢 층별 소모품 재고 현황 (2층 / 6층 / 7층 비교)")
+                df_floor_comp = pd.DataFrame(floor_comparison_data)
+                st.dataframe(df_floor_comp, use_container_width=True, hide_index=True)
+
+                st.write("")
+                col1, col2 = st.columns(2, gap="large")
+                with col1:
+                    st.markdown("#### 📄 소모품 총 재고 (전체 합계)")
+                    df_c_stock = pd.DataFrame([{"품목명": k, "현재 보유량": round(v, 2)} for k, v in consumable_totals.items()])
+                    st.dataframe(df_c_stock, use_container_width=True, hide_index=True)
+
+                with col2:
+                    st.markdown("#### 💻 비품/기기 현재 재고")
+                    df_e_stock = pd.DataFrame([{"품목명": k, "현재 보유량": round(calc_stock.get(k, 0.0), 2)} for k in EQUIPMENT])
+                    st.dataframe(df_e_stock, use_container_width=True, hide_index=True)
 
                 st.markdown("---")
                 st.markdown("### 📋 물품 입출고 및 실사 이력")
@@ -1079,6 +1871,9 @@ elif menu == "📦 물품/비품 재고 관리":
                     df_hist = df_hist[mask]
 
                 df_hist = df_hist.iloc[::-1]
+                for meta_col in ("일시", "구분", "작성자", "비고"):
+                    if meta_col in df_hist.columns:
+                        df_hist[meta_col] = df_hist[meta_col].fillna("").astype(str)
 
                 st.write("")
                 st.dataframe(df_hist, use_container_width=True, hide_index=True)
@@ -1090,3 +1885,75 @@ elif menu == "📦 물품/비품 재고 관리":
                     file_name=f"재고변동이력_{datetime.now().strftime('%Y%m%d')}.csv",
                     mime="text/csv"
                 )
+
+
+# ==========================================
+# 5. 사용자 권한 관리 (교무팀 전용)
+# ==========================================
+elif menu == "👥 사용자 권한 관리" and is_full_admin:
+    st.title("👥 사용자 계정 및 권한 관리")
+    st.caption("교무팀 관리자 전용 메뉴입니다. 가입된 직원의 권한 분류를 변경하거나 퇴사/비인가 계정을 비활성화할 수 있습니다.")
+
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    u_records, u_row_nums = get_users_records_with_rows()
+    df_users_raw = pd.DataFrame(u_records)
+
+    if df_users_raw.empty:
+        st.info("등록된 사용자 정보가 없습니다.")
+    else:
+        u_sheet_row_map = {idx: u_row_nums[idx] for idx in range(len(u_row_nums))}
+        st.markdown("### 📋 가입자 목록 및 권한 설정")
+        st.info("💡 **안내**: '분류' 열을 더블 클릭하여 직책을 변경할 수 있습니다. `비활성`으로 변경된 계정은 즉시 시스템 로그인 및 자동 로그인이 차단됩니다.")
+
+        user_cols = list(df_users_raw.columns)
+        has_role_col = "분류" in user_cols
+
+        if has_role_col:
+            role_col_idx = user_cols.index("분류") + 1
+            role_col_letter = col_letter(role_col_idx)
+
+            disabled_cols = [c for c in user_cols if c != "분류"]
+            edited_users = st.data_editor(
+                df_users_raw,
+                use_container_width=True,
+                hide_index=True,
+                disabled=disabled_cols,
+                column_config={
+                    "분류": st.column_config.SelectboxColumn(
+                        "권한 분류",
+                        options=["직원", "강사", "교무팀", "조교", "비활성"],
+                        required=True
+                    )
+                },
+                key="users_role_editor"
+            )
+
+            st.write("")
+            if st.button("💾 사용자 권한 변경사항 저장하기", use_container_width=True):
+                batch_updates = []
+                changes = 0
+
+                for i in edited_users.index:
+                    old_role = str(df_users_raw.loc[i, "분류"]).strip()
+                    new_role = str(edited_users.loc[i, "분류"]).strip()
+                    if old_role != new_role:
+                        row_num = u_sheet_row_map.get(i, i + 2)
+                        batch_updates.append({
+                            "range": f"{role_col_letter}{row_num}",
+                            "values": [[new_role]]
+                        })
+                        changes += 1
+
+                if batch_updates:
+                    with st.spinner("사용자 권한을 저장하고 있습니다..."):
+                        call_with_retry(lambda: ws_users.batch_update(batch_updates))
+                        refresh_sheet_now("users")
+                    st.success(f"✅ 총 {changes}명의 사용자 권한이 성공적으로 수정되었습니다.")
+                    st.rerun()
+                else:
+                    st.warning("변경된 내용이 없습니다.")
+        else:
+            st.warning("users 시트에 '분류' 컬럼이 존재하지 않습니다.")
+            st.dataframe(df_users_raw, use_container_width=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
