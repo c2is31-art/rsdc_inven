@@ -37,9 +37,18 @@ st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True
 # ==========================================
 # 앱 버전 및 업데이트 이력 정의
 # ==========================================
-APP_VERSION = "v2.2.0"
+APP_VERSION = "v2.2.1"
 LAST_UPDATED = "2026-11-25"
 UPDATE_HISTORY = [
+    {
+        "version": "v2.2.1",
+        "date": "2026.11.25",
+        "changes": [
+            "두레이(Dooray) 웹훅 미수신 원인 해결: Secrets 하위 TOML 섹션([gcp_service_account] 등) 및 config 시트 자동 탐색 지원",
+            "두레이 페이로드/헤더 표준화(UTF-8 JSON, 외부 아이콘 URL 제거) 및 HTTP/JSON 응답 검증 추가",
+            "교무팀 관리자 화면에 '두레이 웹훅 연동 상태 확인 및 테스트 메시지 발송' UI 추가",
+        ],
+    },
     {
         "version": "v2.2.0",
         "date": "2026.11.25",
@@ -109,11 +118,35 @@ def phone_variants(phone_str):
     return variants
 
 
+def _find_secret_recursive(mapping_obj, target_keys_lower, path=""):
+    try:
+        items = list(mapping_obj.items())
+    except Exception:
+        return None, ""
+
+    for k, v in items:
+        if str(k).strip().lower() in target_keys_lower and not isinstance(v, Mapping):
+            val = str(v).strip().strip('"').strip("'")
+            if val:
+                loc = f"{path}.{k}" if path else str(k)
+                return val, loc
+
+    for k, v in items:
+        if isinstance(v, Mapping):
+            sub_path = f"{path}.{k}" if path else str(k)
+            found, loc = _find_secret_recursive(v, target_keys_lower, sub_path)
+            if found:
+                return found, loc
+
+    return None, ""
+
+
 def get_secret(key, default=None):
     try:
         if key in st.secrets:
             return st.secrets[key]
-        return default
+        found, _ = _find_secret_recursive(st.secrets, {key.lower()})
+        return found if found is not None else default
     except Exception:
         return default
 
@@ -121,19 +154,62 @@ def get_secret(key, default=None):
 # ==========================================
 # 🔔 두레이(Dooray) 웹훅 알림 헬퍼 함수
 # ==========================================
+def get_dooray_webhook_info():
+    """Secrets(최상위 및 [gcp_service_account] 등 하위 섹션 포함)와 config 시트에서 웹훅 URL 탐색"""
+    candidate_keys = {"dooray_webhook_url", "dooray_webhook", "webhook_url"}
+    try:
+        url, loc = _find_secret_recursive(st.secrets, candidate_keys)
+        if url:
+            return url, f"Streamlit Secrets ({loc})"
+    except Exception:
+        pass
+
+    try:
+        for r in get_config_records():
+            cat = str(r.get("카테고리", "")).strip().lower()
+            val = str(r.get("항목값", "")).strip().strip('"').strip("'")
+            if cat in ("dooray_webhook_url", "두레이웹훅", "두레이_웹훅") and val:
+                return val, "구글 시트 (config)"
+    except Exception:
+        pass
+
+    return "", ""
+
+
 def send_dooray_alert(message: str):
-    webhook_url = get_secret("dooray_webhook_url", "")
+    """두레이 인커밍 웹훅으로 메시지를 전송하고 (성공여부, 상세결과)를 반환합니다."""
+    webhook_url, source = get_dooray_webhook_info()
     if not webhook_url:
-        return
+        return False, "웹훅 URL 미설정"
+
+    if not webhook_url.startswith(("http://", "https://")):
+        return False, f"올바르지 않은 URL 형식 ({source})"
+
     try:
         payload = {
             "botName": "러셀대치 통합관리 시스템",
-            "botIconImage": "https://static.dooray.com/static_market/images/dooray-bot-profile.png",
-            "text": message
+            "text": str(message),
         }
-        requests.post(webhook_url, json=payload, timeout=5)
-    except Exception:
-        pass
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+        resp = requests.post(webhook_url, json=payload, headers=headers, timeout=10)
+        body_text = (resp.text or "").strip()
+
+        if 200 <= resp.status_code < 300:
+            try:
+                data = resp.json()
+                if isinstance(data, dict):
+                    if data.get("isSuccessful") is False:
+                        return False, f"Dooray 거부: {body_text}"
+                    hdr = data.get("header")
+                    if isinstance(hdr, dict) and hdr.get("isSuccessful") is False:
+                        return False, f"Dooray 거부: {hdr.get('resultMessage') or body_text}"
+            except Exception:
+                pass
+            return True, f"HTTP {resp.status_code} ({source})"
+
+        return False, f"HTTP {resp.status_code}: {body_text[:200]}"
+    except Exception as e:
+        return False, f"전송 예외: {e}"
 
 
 # ==========================================
@@ -1139,11 +1215,12 @@ st.sidebar.markdown(f"""
             📌 버전: {APP_VERSION} ({latest_ver['date']} 업데이트)
         </div>
         <div style="color: #cbd5e1; font-size: 0.74rem; line-height: 1.45; margin-top: 6px;">
+            • 두레이 웹훅 인식·전송 개선 & 테스트 UI<br>
             • 429 API 할당량 초과 방지 & 캐시 폴백<br>
             • 가입코드·토큰 보안 & 권한관리 UI<br>
             • 조교 재고 대시보드 & 일괄 입·출고<br>
             • 전산재고 연동 실사 & 층별·발주 표<br>
-            • 중복알림·처리메모·모바일 카드·QR·두레이
+            • 중복알림·처리메모·모바일 카드·QR
         </div>
     </div>
 """, unsafe_allow_html=True)
@@ -1153,6 +1230,14 @@ with st.sidebar.expander("📜 전체 업데이트 상세 보기"):
         st.markdown(f"**{item['version']}** ({item['date']})")
         for ch in item["changes"]:
             st.markdown(f"- {ch}")
+
+# st.rerun() 이후 유지되는 두레이 알림 피드백 표시
+if "dooray_flash" in st.session_state:
+    flash_kind, flash_msg = st.session_state.pop("dooray_flash")
+    if flash_kind == "ok":
+        st.toast(flash_msg, icon="🔔")
+    elif flash_kind == "warn":
+        st.warning(flash_msg)
 
 
 # ==========================================
@@ -1244,9 +1329,14 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
                             f"• 작성자: {st.session_state['user_name']}\n"
                             f"• 상세내용:\n{details.strip()}"
                         )
-                        send_dooray_alert(dooray_msg)
+                        alert_ok, alert_detail = send_dooray_alert(dooray_msg)
 
                     st.success("✅ 요청이 성공적으로 등록되었습니다. '진행 현황 확인' 탭에서 처리 상태를 확인하세요.")
+                    if get_dooray_webhook_info()[0]:
+                        if alert_ok:
+                            st.toast("🔔 두레이 알림이 발송되었습니다.", icon="✅")
+                        else:
+                            st.warning(f"⚠️ 요청은 저장되었으나 두레이 알림 전송에 실패했습니다: {alert_detail}")
                     st.balloons()
                 else:
                     st.error("상세 내용을 입력해 주세요.")
@@ -1288,9 +1378,14 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
                             f"• 작성자: {st.session_state['user_name']}\n"
                             f"• 구매사유:\n{item_r.strip()}"
                         )
-                        send_dooray_alert(dooray_msg)
+                        alert_ok, alert_detail = send_dooray_alert(dooray_msg)
 
                     st.success("✅ 구매 요청이 성공적으로 등록되었습니다.")
+                    if get_dooray_webhook_info()[0]:
+                        if alert_ok:
+                            st.toast("🔔 두레이 알림이 발송되었습니다.", icon="✅")
+                        else:
+                            st.warning(f"⚠️ 요청은 저장되었으나 두레이 알림 전송에 실패했습니다: {alert_detail}")
                     st.balloons()
                 else:
                     st.error("물품명과 구매 사유를 모두 입력해 주세요.")
@@ -1656,7 +1751,12 @@ elif menu == "📦 물품/비품 재고 관리":
                         f"• 실사 담당자: {st.session_state['user_name']}\n"
                         f"• 발주 필요 품목 리스트:\n" + "\n".join(low_stock_alerts)
                     )
-                    send_dooray_alert(alert_text)
+                    alert_ok, alert_detail = send_dooray_alert(alert_text)
+                    if get_dooray_webhook_info()[0]:
+                        if alert_ok:
+                            st.session_state["dooray_flash"] = ("ok", "부족 품목 두레이 알림이 발송되었습니다.")
+                        else:
+                            st.session_state["dooray_flash"] = ("warn", f"⚠️ 실사는 저장되었으나 두레이 부족 품목 알림 전송에 실패했습니다: {alert_detail}")
 
             st.success("✅ 오늘자 마감 실사 데이터가 정상적으로 저장되었습니다!")
             st.rerun()
@@ -1956,4 +2056,38 @@ elif menu == "👥 사용자 권한 관리" and is_full_admin:
             st.warning("users 시트에 '분류' 컬럼이 존재하지 않습니다.")
             st.dataframe(df_users_raw, use_container_width=True)
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # 두레이 웹훅 연동 상태 진단 및 테스트 발송 UI
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown("### 🔔 두레이(Dooray) 웹훅 연동 상태 및 테스트")
+    hook_url, hook_source = get_dooray_webhook_info()
+    if hook_url:
+        masked_url = f"{hook_url[:36]}...{hook_url[-6:]}" if len(hook_url) > 45 else hook_url
+        st.success(f"✅ 두레이 웹훅이 연결되어 있습니다. (인식 위치: `{hook_source}`)")
+        st.caption(f"등록된 웹훅 URL: `{masked_url}`")
+        if st.button("📨 두레이 테스트 메시지 발송하기", key="test_dooray_btn", use_container_width=True):
+            with st.spinner("두레이 채널로 테스트 메시지를 발송하고 있습니다..."):
+                test_ok, test_detail = send_dooray_alert(
+                    f"🔔 [연동 테스트] 러셀대치 통합관리 시스템({APP_VERSION}) 두레이 웹훅 테스트 메시지입니다.\n"
+                    f"• 발송 시각: {get_kst_now()} (KST)\n"
+                    f"• 실행자: {st.session_state['user_name']}"
+                )
+            if test_ok:
+                st.success(f"🎉 두레이 테스트 메시지 발송 성공! ({test_detail})")
+            else:
+                st.error(f"❌ 두레이 발송 실패: {test_detail}")
+    else:
+        st.warning("⚠️ 현재 `dooray_webhook_url` 설정이 감지되지 않았습니다.")
+        st.markdown("""
+        **설정 방법 (Streamlit Cloud → Settings → Secrets 또는 구글 시트 `config` 탭):**
+        1. Streamlit Secrets에 아래와 같이 추가한 뒤 앱을 **Reboot** 해 주세요:
+        ```toml
+        dooray_webhook_url = "https://hook.dooray.com/services/..."
+
+        [gcp_service_account]
+        ...
+        ```
+        2. 또는 `러셀대치_통합DB` 시트의 `config` 탭에 `카테고리 = dooray_webhook_url`, `항목값 = https://hook.dooray.com/services/...` 로 등록해도 즉시 적용됩니다.
+        """)
     st.markdown('</div>', unsafe_allow_html=True)
