@@ -38,9 +38,18 @@ st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True
 # ==========================================
 # 앱 버전 및 업데이트 이력 정의
 # ==========================================
-APP_VERSION = "v2.3.0"
+APP_VERSION = "v2.4.0"
 LAST_UPDATED = "2026-11-25"
 UPDATE_HISTORY = [
+    {
+        "version": "v2.4.0",
+        "date": "2026.11.25",
+        "changes": [
+            "비로그인 QR 간편 신고 모드(qr=1) 추가: 로그인 없이 공간·세부위치 자동 선택 후 즉시 시설 고장 신고 제출 및 두레이 알림 발송",
+            "QR 모드 전용 보안 격리(사이드바·재고·기존 요청 현황 비노출) 및 60초 연속 제출 방지(last_qr_submit) 적용",
+            "위치별 QR 접속 링크 생성기에 '&qr=1' 파라미터 자동 포함",
+        ],
+    },
     {
         "version": "v2.3.0",
         "date": "2026.11.25",
@@ -1179,6 +1188,135 @@ if "user_phone" not in st.session_state: st.session_state["user_phone"] = ""
 if "user_role" not in st.session_state: st.session_state["user_role"] = ""
 
 
+def get_query_param(key, default=None):
+    try:
+        val = st.query_params.get(key, default)
+        if isinstance(val, list):
+            return val[0] if val else default
+        return val if val is not None else default
+    except Exception:
+        try:
+            qp = st.experimental_get_query_params()
+            vals = qp.get(key, [])
+            return vals[0] if vals else default
+        except Exception:
+            return default
+
+
+# ==========================================
+# 📱 비로그인 QR 간편 신고 모드 (?qr=1)
+# ==========================================
+if not st.session_state["logged_in"] and str(get_query_param("qr", "")).strip() == "1":
+    st.markdown("""
+        <style>
+        [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], section[data-testid="stSidebar"] {
+            display: none !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    render_hero(
+        "🏢 러셀대치학원 시설 고장 간편 신고",
+        "로그인 없이 현장 시설 고장·보수 요청을 바로 접수할 수 있습니다.",
+        ["📱 QR 간편 신고", f"📌 {APP_VERSION}"]
+    )
+
+    qr_param_space = get_query_param("space")
+    qr_param_detail = get_query_param("detail")
+
+    qr_space_keys = list(SPACES.keys())
+    qr_def_space_idx = qr_space_keys.index(qr_param_space) if (qr_param_space and qr_param_space in qr_space_keys) else 0
+
+    with st.container(border=True):
+        st.markdown('<span class="step-badge">STEP 1 · 고장 위치 확인</span>', unsafe_allow_html=True)
+        qr_space_cat = st.radio("공간 구분", qr_space_keys, index=qr_def_space_idx, horizontal=True, key="qr_space_cat")
+
+        qr_det_options = SPACES[qr_space_cat]
+        qr_def_detail_idx = qr_det_options.index(qr_param_detail) if (qr_param_detail and qr_param_detail in qr_det_options) else 0
+        qr_det_space = st.selectbox("세부 위치", qr_det_options, index=qr_def_detail_idx, key="qr_det_space")
+
+        st.markdown(
+            f'<div class="loc-banner">📍 신고 위치: <b>{html.escape(qr_space_cat)}</b> &rsaquo; <b>{html.escape(qr_det_space)}</b></div>',
+            unsafe_allow_html=True
+        )
+
+        st.markdown("---")
+        st.markdown('<span class="step-badge">STEP 2 · 고장 내용 및 사진 첨부</span>', unsafe_allow_html=True)
+        qr_cat = st.selectbox(
+            "보수 분류",
+            [c for c in CATEGORY_BY_SPACE[qr_space_cat] if c != "신규 물품 구매 요청"],
+            key="qr_cat"
+        )
+        qr_details = st.text_area(
+            "상세 고장 내용",
+            placeholder="예: 세면대 수도꼭지가 고장났거나 에어컨이 작동하지 않습니다.",
+            height=120,
+            key="qr_details"
+        )
+        qr_photo = st.file_uploader(
+            "📷 현장 사진 첨부 (선택사항, 8MB 이하)",
+            type=["png", "jpg", "jpeg"],
+            key="qr_photo"
+        )
+        if qr_photo is not None:
+            st.image(qr_photo, caption="첨부 미리보기", width=240)
+            if photo_too_large(qr_photo):
+                st.error(f"사진 용량이 {MAX_PHOTO_MB}MB를 초과합니다. 더 작은 파일로 첨부해 주세요.")
+
+        qr_reporter = st.text_input(
+            "신고자 이름/구분 (선택, 미입력 시 'QR현장신고')",
+            placeholder="예: 홍길동 / 재원생 / OO관 조교",
+            key="qr_reporter"
+        )
+
+        st.write("")
+        if st.button("🚨 고장 신고 제출하기", use_container_width=True, key="qr_submit_btn"):
+            last_qr_ts = st.session_state.get("last_qr_submit")
+            if last_qr_ts is not None and (time.time() - float(last_qr_ts)) < 60:
+                remain_sec = max(1, int(60 - (time.time() - float(last_qr_ts))) + 1)
+                st.warning(f"⏳ 잠시 후 다시 시도해 주세요. ({remain_sec}초 후 추가 신고 가능)")
+            elif photo_too_large(qr_photo):
+                st.error(f"사진 용량이 {MAX_PHOTO_MB}MB를 초과합니다. 첨부 파일을 확인해 주세요.")
+            elif not qr_details.strip():
+                st.error("상세 고장 내용을 입력해 주세요.")
+            else:
+                with st.spinner("신고를 접수하고 있습니다..."):
+                    photo_url = upload_photo_to_drive(qr_photo)
+                    now_str = get_kst_now()
+                    reporter_name = qr_reporter.strip() or "QR현장신고"
+                    base_row = [
+                        now_str,
+                        qr_space_cat,
+                        qr_det_space,
+                        f"[보수] {qr_cat}",
+                        qr_details.strip(),
+                        photo_url,
+                        "접수완료",
+                        reporter_name
+                    ]
+                    row = ([generate_request_id()] + base_row) if FACILITY_HAS_ID else base_row
+                    call_with_retry(lambda: ws_facility.append_row(row))
+                    refresh_sheet_now("facility")
+
+                    st.session_state["last_qr_submit"] = time.time()
+
+                    dooray_msg = (
+                        f"🚨 [QR 간편 시설 보수 신고]\n"
+                        f"• 위치: {qr_space_cat} > {qr_det_space}\n"
+                        f"• 분류: [보수] {qr_cat}\n"
+                        f"• 신고자: {reporter_name}\n"
+                        f"• 상세내용:\n{qr_details.strip()}"
+                    )
+                    alert_ok, alert_detail = send_dooray_alert(dooray_msg)
+
+                st.success("✅ 시설 고장 신고가 정상적으로 접수되었습니다. 담당자가 확인 후 신속히 조치하겠습니다.")
+                if get_dooray_webhook_info()[0] and not alert_ok:
+                    st.warning(f"⚠️ 신고는 정상 저장되었으나 두레이 알림 발송이 지연되었습니다: {alert_detail}")
+                st.balloons()
+
+    st.stop()
+
+
 # ==========================================
 # 🔑 자동 로그인 검증 (쿠키 해시 토큰 기반)
 # ==========================================
@@ -1434,10 +1572,10 @@ st.sidebar.markdown(f"""
             📌 버전: {APP_VERSION} ({latest_ver['date']} 업데이트)
         </div>
         <div style="color: #cbd5e1; font-size: 0.74rem; line-height: 1.48;">
+            • 비로그인 QR 간편 신고 모드(qr=1) 추가<br>
             • 603호·담임공간·교무실·원장실·복도·로비 추가<br>
             • 히어로 배너·KPI 카드·원터치 위치 UI 개편<br>
-            • 두레이 웹훅 탐색·테스트 UI & 429 방어<br>
-            • 전산연동 실사·일괄 입출고·발주목록 CSV
+            • 두레이 웹훅 테스트 UI & 429 할당량 방어
         </div>
     </div>
 """, unsafe_allow_html=True)
@@ -1526,8 +1664,8 @@ if menu == "🛠️ 시설 보수 및 구매 요청":
 
             if is_full_admin or is_silsa_staff:
                 with st.expander("🔗 이 위치 전용 QR 접속 링크 확인"):
-                    qr_link = f"https://rsdc-inven.streamlit.app/?space={quote(space_cat)}&detail={quote(det_space)}"
-                    st.caption("아래 링크를 QR코드로 생성해 부착하면 스캔 즉시 해당 공간이 자동 선택됩니다.")
+                    qr_link = f"https://rsdc-inven.streamlit.app/?space={quote(space_cat)}&detail={quote(det_space)}&qr=1"
+                    st.caption("아래 링크를 QR코드로 생성해 부착하면 비로그인 사용자도 즉시 간편 고장 신고 화면으로 접속합니다.")
                     st.code(qr_link, language="text")
 
             st.markdown("---")
